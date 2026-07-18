@@ -14,9 +14,13 @@ cd /opt/cpayne
 LOGFILE=""
 if [ -d /log ]; then
   LOGFILE="/log/pcie-stress-$(date +%Y%m%d-%H%M%S).log"
+elif [ -d /workspace ] && [ -w /workspace ]; then
+  # RunPod-style persistent volume — survives pod stop without any setup
+  LOGFILE="/workspace/pcie-stress-$(date +%Y%m%d-%H%M%S).log"
 elif [ -n "${LOG_URL:-}" ]; then
   LOGFILE="/tmp/pcie-stress-run.log"
 fi
+[ -n "$LOGFILE" ] && echo "Logging to: $LOGFILE"
 if [ -n "$LOGFILE" ]; then
   exec > >(tee -a "$LOGFILE") 2>&1
 fi
