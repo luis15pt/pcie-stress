@@ -217,6 +217,27 @@ def summary(base: dict) -> None:
         console.print(tbl)
 
 
+def log_mode(base: dict, interval: float, stop: list) -> None:
+    """No TTY (docker logs, redirects): print compact status lines instead."""
+    interval = max(interval, 10.0)
+    while not stop:
+        tel = smi()
+        parts = []
+        for dev, port in gpus():
+            t = tel.get(dev.name, {})
+            d = (cor(port) or 0) - base.get(port.name, 0) + (cor(dev) or 0) - base.get(dev.name, 0)
+            parts.append(f"{dev.name[5:]} {t.get('util', 0):3.0f}%% {t.get('temp', 0):.0f}C "
+                         f"{t.get('power', 0):.0f}W aer+{d}")
+        noisy = [f"{d.name}+{c - base.get(d.name, 0)}"
+                 for d in (sorted(PCI.iterdir()) if PCI.is_dir() else [])
+                 if (c := cor(d)) and c - base.get(d.name, 0) > 0]
+        line = time.strftime("%H:%M:%S ") + " | ".join(parts)
+        if noisy:
+            line += "  !! deltas: " + " ".join(noisy)
+        print(line.replace("%%", "%"), flush=True)
+        time.sleep(interval)
+
+
 def main() -> None:
     interval = float(sys.argv[1]) if len(sys.argv) > 1 else 3.0
     base = snapshot()
@@ -225,10 +246,13 @@ def main() -> None:
     stop = []
     signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
     try:
-        with Live(render(base), console=console, screen=True, refresh_per_second=4) as live:
-            while not stop:
-                time.sleep(interval)
-                live.update(render(base))
+        if console.is_terminal:
+            with Live(render(base), console=console, screen=True, refresh_per_second=4) as live:
+                while not stop:
+                    time.sleep(interval)
+                    live.update(render(base))
+        else:
+            log_mode(base, interval, stop)
     except KeyboardInterrupt:
         pass
     summary(base)
