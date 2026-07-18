@@ -76,8 +76,21 @@ above to pin link speed/ASPM.
 Pull and run **on the GPU server** (needs nvidia-container-toolkit):
 
 ```bash
+# default = power sweep: 80% -> 90% -> 100% of each GPU's default power limit,
+# 1h of gpu_burn+DMA per stage, stop at first dropout, report stable ceiling
+docker run --rm -it --privileged --gpus all ghcr.io/luis15pt/pcie-stress:latest
+docker run --rm -it --privileged --gpus all ghcr.io/luis15pt/pcie-stress:latest sweep 80,90,100 3600
 docker run --rm -it --privileged --gpus all ghcr.io/luis15pt/pcie-stress:latest full 900
 ```
+
+Stages <=100 are %% of the card's own default limit (works on any GPU model);
+values >100 are absolute watts. Cards are always restored to 100%% afterwards.
+
+### Keeping logs when the container dies with the GPU
+
+1. Hosts you own (best): `echo '{"log-driver":"journald"}' | sudo tee /etc/docker/daemon.json && sudo systemctl restart docker` — every container's output survives removal; retrieve with `journalctl CONTAINER_NAME=<name>`.
+2. Manual runs: add `-v /var/log/pcie-stress:/log` — output teed to a timestamped file.
+3. Managed pods (RunPod etc.): set `-e LOG_URL=https://your-endpoint` — the log is re-POSTed there every 60s.
 
 Or build locally:
 

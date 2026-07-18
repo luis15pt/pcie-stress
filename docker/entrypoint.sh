@@ -1,8 +1,31 @@
 #!/bin/bash
 # Containerized C-Payne PCIe/GPU stress suite.
-# Modes: menu (default) | preflight | watch | bandwidth | burn [s] | dma [s] |
-#        nvme [s] | full [s] | margin <port-bdf> | shell
+# Modes: sweep [stages] [dwell] (default: 80,90,100 x 3600s) | menu | preflight | watch |
+#        bandwidth | burn [s] [flags] | dma [s] | nvme [s] | full [s] | margin <port> | shell
 cd /opt/cpayne
+
+# Log persistence — a GPU drop usually ends with the container removed and
+# docker logs gone (RunPod, --rm). Three options, in order of preference:
+#   1. host journald:  {"log-driver":"journald"} in /etc/docker/daemon.json (no
+#      container config needed; recommended on hosts you own)
+#   2. -v host:/log    (manual runs): output teed to a timestamped file
+#   3. LOG_URL=http(s)://... : log file re-POSTed there every 60s (works on
+#      RunPod-style pods where you control neither docker run nor the host)
+LOGFILE=""
+if [ -d /log ]; then
+  LOGFILE="/log/pcie-stress-$(date +%Y%m%d-%H%M%S).log"
+elif [ -n "${LOG_URL:-}" ]; then
+  LOGFILE="/tmp/pcie-stress-run.log"
+fi
+if [ -n "$LOGFILE" ]; then
+  exec > >(tee -a "$LOGFILE") 2>&1
+fi
+if [ -n "${LOG_URL:-}" ] && [ -n "$LOGFILE" ]; then
+  ( while sleep 60; do
+      curl -fsS -X POST -H 'Content-Type: text/plain' \
+        --data-binary @"$LOGFILE" "$LOG_URL" >/dev/null 2>&1 || true
+    done ) &
+fi
 
 ngpus() { ls -d /proc/driver/nvidia/gpus/* 2>/dev/null | wc -l; }
 
@@ -73,6 +96,71 @@ full() { # full <seconds>
   grep -H . /sys/bus/pci/devices/*/aer_dev_correctable 2>/dev/null | grep TOTAL_ERR_COR | grep -v ':TOTAL_ERR_COR 0$' || echo 'all zero - clean run'
 }
 
+new_dropouts() { # count of 'fallen off the bus' kernel lines
+  dmesg 2>/dev/null | grep -c 'fallen off the bus'
+}
+
+set_limits() { # set_limits <stage>  — stage <=100 means % of each GPU's default limit, >100 means watts
+  local stage=$1 line idx dflt min tgt
+  while IFS=, read -r idx dflt min; do
+    idx=$(echo "$idx" | tr -d ' '); dflt=${dflt%%.*}; min=${min%%.*}
+    if [ "$stage" -le 100 ]; then tgt=$((dflt * stage / 100)); else tgt=$stage; fi
+    [ "$tgt" -lt "$min" ] && tgt=$min
+    [ "$tgt" -gt "$dflt" ] && tgt=$dflt
+    nvidia-smi -i "$idx" -pl "$tgt" >/dev/null || return 1
+    echo "  GPU $idx: limit ${tgt}W (default ${dflt}W)"
+  done < <(nvidia-smi --query-gpu=index,power.default_limit,power.min_limit --format=csv,noheader,nounits)
+}
+
+sweep() { # sweep <stages: % of default limit (or watts if >100)> <dwell seconds per stage>
+  local stages=${1:-80,90,100} dwell=${2:-3600}
+  local n_start baseline stage elapsed failed_at="" results=""
+  n_start=$(ngpus)
+  echo "POWER SWEEP: stages=${stages} (% of each GPU's default limit) dwell=${dwell}s/stage gpus=${n_start}"
+  if ! set_limits 100; then
+    echo 'ERROR: cannot set power limits (needs admin rights on the GPU - --privileged, or root on the host).'
+    return 1
+  fi
+  for stage in ${stages//,/ }; do
+    baseline=$(new_dropouts)
+    echo ''
+    echo "=== stage: ${stage} for ${dwell}s ==="
+    set_limits "$stage"
+    bin/gpu_burn -tc "$dwell" >/tmp/gpu_burn.log 2>&1 &
+    dma_stress "$dwell"
+    python3 ./docker/aer_watch.py 10 < /dev/null | cat &   # pipe forces log mode
+    local mon_pid=$!
+    elapsed=0
+    while [ "$elapsed" -lt "$dwell" ]; do
+      sleep 15; elapsed=$((elapsed + 15))
+      if [ "$(new_dropouts)" -gt "$baseline" ] || [ "$(ngpus)" -lt "$n_start" ]; then
+        failed_at="$stage"
+        break
+      fi
+    done
+    kill "$mon_pid" 2>/dev/null
+    cleanup
+    if [ -n "$failed_at" ]; then
+      results="${results}stage ${stage}: FAIL after ${elapsed}s\n"
+      echo "FAIL: GPU dropped off the bus at stage ${stage} after ${elapsed}s"
+      dmesg 2>/dev/null | grep -E 'Xid|fallen off' | tail -5
+      break
+    fi
+    results="${results}stage ${stage}: PASS ${dwell}s\n"
+    echo "PASS: stage ${stage} held for ${dwell}s"
+    sleep 10   # settle between stages
+  done
+  set_limits 100 >/dev/null 2>&1   # always leave the cards at their default max
+  echo ''
+  echo '=== POWER SWEEP RESULT ==='
+  printf "%b" "$results"
+  if [ -n "$failed_at" ]; then
+    echo "Stable ceiling is BELOW stage ${failed_at} - node reboot required to recover the dropped GPU."
+  else
+    echo "All stages passed - no dropout up to 100% power limit."
+  fi
+}
+
 menu() {
   while true; do
     echo ''
@@ -105,7 +193,7 @@ menu() {
   done
 }
 
-case "${1:-menu}" in
+case "${1:-sweep}" in
   menu)      menu ;;
   preflight) ./preflight.sh ;;
   watch)     monitor "${2:-3}" ;;
@@ -114,6 +202,7 @@ case "${1:-menu}" in
   dma)       dma_stress "${2:-1800}"; wait ;;
   nvme)      nvme_stress "${2:-1800}"; wait ;;
   full)      full "${2:-1800}" ;;
+  sweep)     sweep "${2:-80,90,100}" "${3:-3600}" ;;
   margin)    bin/Lane-Margining -s "$2" -t "containerized" ;;
   shell)     exec bash ;;
   *)         echo "unknown mode: $1"; exit 1 ;;

@@ -1,7 +1,7 @@
 FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      pciutils ocl-icd-libopencl1 libgmp10 kmod python3 python3-rich \
+      pciutils ocl-icd-libopencl1 libgmp10 kmod python3 python3-rich curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /etc/OpenCL/vendors \
     && echo libnvidia-opencl.so.1 > /etc/OpenCL/vendors/nvidia.icd
@@ -23,4 +23,4 @@ ENV NVIDIA_VISIBLE_DEVICES=all \
 
 WORKDIR /opt/cpayne
 ENTRYPOINT ["/opt/cpayne/docker/entrypoint.sh"]
-CMD ["menu"]
+CMD ["sweep"]
