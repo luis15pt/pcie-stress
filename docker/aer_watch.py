@@ -83,9 +83,9 @@ def fmt_flags(flags: set[str]) -> str:
 
 def smi() -> dict[str, dict]:
     """{bdf: {util, mem_*, temp, power, plimit, clk, clk_max, reasons}}."""
-    base_q = ("pci.bus_id,utilization.gpu,memory.used,memory.total,"
+    base_q = ("pci.bus_id,utilization.gpu,utilization.memory,memory.used,memory.total,"
               "temperature.gpu,temperature.memory,fan.speed,"
-              "power.draw,power.limit,clocks.sm,clocks.max.sm,clocks.mem")
+              "power.draw,power.limit,clocks.sm,clocks.max.sm,clocks.mem,clocks.max.mem")
     out = ""
     for _ in range(2):
         q = f"{base_q},{_reason_field[0]}"
@@ -102,20 +102,31 @@ def smi() -> dict[str, dict]:
     info = {}
     for line in out.splitlines():
         f = [x.strip() for x in line.split(",")]
-        if len(f) != 13:
+        if len(f) != 15:
             continue
         bdf = f[0].lower().replace("00000000:", "0000:")
         num = lambda s: float(s) if s.replace(".", "").isdigit() else 0.0
         opt = lambda s: float(s) if s.replace(".", "").isdigit() else None  # N/A -> None
         try:
-            mask = int(f[12], 16)
+            mask = int(f[14], 16)
         except ValueError:
             mask = 0
-        info[bdf] = dict(util=num(f[1]), mem_used=num(f[2]), mem_total=num(f[3]),
-                         temp=num(f[4]), vram=opt(f[5]), fan=opt(f[6]),
-                         power=num(f[7]), plimit=num(f[8]),
-                         clk=num(f[9]), clk_max=num(f[10]), mclk=num(f[11]), reasons=mask)
+        info[bdf] = dict(util=num(f[1]), memutil=num(f[2]),
+                         mem_used=num(f[3]), mem_total=num(f[4]),
+                         temp=num(f[5]), vram=opt(f[6]), fan=opt(f[7]),
+                         power=num(f[8]), plimit=num(f[9]),
+                         clk=num(f[10]), clk_max=num(f[11]),
+                         mclk=num(f[12]), mclk_max=num(f[13]), reasons=mask)
     return info
+
+
+GEN = {"2.5": "1.0", "5.0": "2.0", "8.0": "3.0", "16.0": "4.0", "32.0": "5.0", "64.0": "6.0"}
+
+
+def link_str(dev: Path) -> str:
+    """e.g. 'pcie4.0@x8' from sysfs current link speed/width."""
+    spd = read(dev / "current_link_speed").split(" ")[0]
+    return f"pcie{GEN.get(spd, spd)}@x{read(dev / 'current_link_width')}"
 
 
 class Tracker:
@@ -131,6 +142,17 @@ class Tracker:
         self.events: deque[str] = deque(maxlen=200)
         self.seen_klog: set[str] = set()
         self.klog_primed = False
+        self.prev_link: dict[str, str] = {}
+
+    def link_events(self, ts: str) -> list[str]:
+        events = []
+        for dev, _ in gpus():
+            cur = link_str(dev)
+            prev = self.prev_link.get(dev.name)
+            if prev is not None and cur != prev:
+                events.append(f"{ts} EVENT gpu={dev.name} link retrained: {prev} -> {cur}")
+            self.prev_link[dev.name] = cur
+        return events
 
     def kernel_events(self) -> list[str]:
         """New AER/Xid kernel lines since last tick (needs dmesg access)."""
@@ -195,6 +217,7 @@ class Tracker:
         self.prev_aer = cur
         self.prev_tel = tel
         self.tel = tel
+        events += self.link_events(ts)
         events += self.kernel_events()
         self.events.extend(events)
         return events
@@ -247,13 +270,11 @@ def tail_lines(cmd_or_path, match=None, n=8) -> str:
 def gpu_table(base: dict, trk: Tracker) -> Table:
     tel = trk.tel or smi()
     tbl = Table(expand=True, header_style="bold cyan", border_style="dim")
-    for col in ("GPU", "util", "temp", "vram/fan", "power", "sm clk", "throttle",
+    for col in ("GPU", "util", "mem", "temp", "vram/fan", "power", "sm clk", "throttle",
                 "link", "AER cor port(+run)", "AER cor dev(+run)"):
         tbl.add_column(col)
     for dev, port in gpus():
         t = tel.get(dev.name, {})
-        cs, ms = read(dev / "current_link_speed").split(" ")[0], read(dev / "max_link_speed").split(" ")[0]
-        cw = read(dev / "current_link_width")
         degraded = read(port / "current_link_speed") != read(port / "max_link_speed")
         flags = throttle_flags(int(t.get("reasons", 0)))
         thr_style = "bold red" if flags & HW_FLAGS else "yellow" if "sw-thermal" in flags else "dim"
@@ -261,13 +282,14 @@ def gpu_table(base: dict, trk: Tracker) -> Table:
         tbl.add_row(
             Text(f"{dev.name}\nport {port.name}", style="bold red" if gone else ""),
             Text("DROPPED?", style="bold red") if gone else (bar(t.get("util", 0.0)) if t else Text("-", style="dim")),
+            f"{t.get('mem_used', 0):.0f}M {t.get('memutil', 0):.0f}%" if t else "-",
             temp_cell(t["temp"]) if t else Text("-", style="dim"),
             (f"{t['vram']:.0f}°C" if t.get("vram") is not None else "n/a")
             + " / " + (f"{t['fan']:.0f}%" if t.get("fan") is not None else "n/a") if t else "-",
             f"{t.get('power', 0):.0f}/{t.get('plimit', 0):.0f}W" if t else "-",
             f"{t.get('clk', 0):.0f}/{t.get('clk_max', 0):.0f}" if t else "-",
             Text(fmt_flags(flags - {"sw-power-cap"}), style=thr_style),
-            Text(f"{cs}/{ms} GT/s x{cw}", style="bold red" if degraded else ""),
+            Text(link_str(dev), style="bold red" if degraded else ""),
             count_cell(cor(port), base, port.name),
             count_cell(cor(dev), base, dev.name),
         )
@@ -324,12 +346,13 @@ def log_mode(base: dict, interval: float, stop: list, trk: Tracker) -> None:
                 continue
             d = trk.gpu_run_delta(dev, port)
             flags = throttle_flags(int(t["reasons"]))
-            vram = f"vram={t['vram']:.0f}C " if t["vram"] is not None else ""
+            vram = f"vramtemp={t['vram']:.0f}C " if t["vram"] is not None else ""
             fan = f"fan={t['fan']:.0f}% " if t["fan"] is not None else ""
-            link = f"{read(dev / 'current_link_speed').split(' ')[0]}GT/s x{read(dev / 'current_link_width')}"
-            print(f"{ts} gpu={dev.name[5:]} util={t['util']:.0f}% temp={t['temp']:.0f}C {vram}{fan}"
+            print(f"{ts} gpu={dev.name[5:]} util={t['util']:.0f}% memutil={t['memutil']:.0f}% "
+                  f"vram={t['mem_used']:.0f}/{t['mem_total']:.0f}M temp={t['temp']:.0f}C {vram}{fan}"
                   f"pwr={t['power']:.0f}/{t['plimit']:.0f}W sm={t['clk']:.0f}/{t['clk_max']:.0f}MHz "
-                  f"mem={t['mclk']:.0f}MHz link={link} aer=+{d} thr={fmt_flags(flags)}", flush=True)
+                  f"memclk={t['mclk']:.0f}/{t['mclk_max']:.0f}MHz link={link_str(dev)} "
+                  f"aer=+{d} thr={fmt_flags(flags)}", flush=True)
         for e in events:
             print(e, flush=True)
         time.sleep(interval)
