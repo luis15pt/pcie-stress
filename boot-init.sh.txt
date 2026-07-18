@@ -1,0 +1,244 @@
+#!/bin/busybox sh
+
+revision='C-Payne-test_rev.26'
+
+busybox rm /init
+busybox mkdir -p /proc /sys /dev /run /tmp /usr/bin /usr/sbin /root
+busybox mount -t proc proc /proc
+busybox mount -t sysfs sys /sys
+busybox mount -t devtmpfs udev /dev
+busybox mount -t tmpfs tmpfs /dev/shm
+busybox mount -t tmpfs tmpfs /run
+busybox mount -t tmpfs tmpfs /tmp
+busybox mdev -s
+busybox --install
+insmod /modules/xhci-pci-renesas.ko
+insmod /modules/hid.ko
+insmod /modules/hid-generic.ko
+insmod /modules/usbhid.ko
+insmod /modules/hkdf.ko
+insmod /modules/nvme-auth.ko
+insmod /modules/nvme-keyring.ko
+insmod /modules/nvme-core.ko
+insmod /modules/nvme.ko
+insmod /modules/switchtec.ko
+
+hostname localhost
+ip link set lo up
+echo root::0:0:root:/root:/bin/sh > /etc/passwd
+echo 2 > /proc/sys/kernel/printk
+
+while true; do
+clear
+echo 'PCIe Stress Test Tool by C-Payne (c-payne.com) '$revision
+echo ''
+echo 'Please select your Platform!'
+echo ''
+echo '1) AMD Server'
+echo '2) AMD Workstation'
+echo '3) AMD Mainstream'
+echo '4) Intel Server'
+echo '5) Intel Workstation'
+echo '6) Intel Mainstream'
+echo '7) PCIe Switches'
+echo '*) generic'
+read n
+case $n in
+  1) echo ''
+     echo ''
+     echo 'Please select your Platform!'
+     echo ''
+     echo '1) ROME'
+     echo '2) GENOA'
+     echo '*) generic'
+     read m
+     case $m in
+       1) echo ''
+          echo 'Please select your Mainboard!'
+          echo ''
+          echo '1) ASRock-Rack ROMED8-2T'
+          echo '2) ASRock-Rack ROMED16QM3'
+          echo '3) ASRock-Rack ROME2D32GM-2T'
+          echo '4) Supermicro H12SSW-NTR / H12SSW-iNR'
+          echo '*) generic ROME'
+          read o
+          case $o in
+            1) cp /c-payne/mainboards/AMD_SERVER/ROME/ASRock-Rack_ROMED8-2T.sh /c-payne/mainboard.sh;;
+            2) cp /c-payne/mainboards/AMD_SERVER/ROME/ASRock-Rack_ROMED16QM3.sh /c-payne/mainboard.sh;;
+            3) cp /c-payne/mainboards/AMD_SERVER/ROME/ASRock-Rack_ROME2D32GM-2T.sh /c-payne/mainboard.sh;;
+            4) cp /c-payne/mainboards/AMD_SERVER/ROME/Supermicro_H12SSW-NTR_H12SSW-iNR.sh /c-payne/mainboard.sh;;
+            *) cp /c-payne/mainboards/AMD_SERVER/ROME/generic_ROME.sh /c-payne/mainboard.sh;;
+          esac ;;
+
+       2) echo ''
+          echo 'Please select your Mainboard!'
+          echo ''
+          echo '1) Supermicro H13SSL-N / H13SSL-NT'
+          echo '2) ASRock-Rack GENOA2D24G-2L+'
+          echo '3) ASRock-Rack GENOAD8HM3'
+          echo '4) ASRock-Rack GENOAD24QM32-2L2T'
+          echo '*) generic GENOA'
+          read o
+          case $o in
+            1) cp /c-payne/mainboards/AMD_SERVER/GENOA/Supermicro_H13SSL-N_H13SSL-NT.sh /c-payne/mainboard.sh;;
+            2) cp /c-payne/mainboards/AMD_SERVER/GENOA/ASRock-Rack_GENOA2D24G-2L+.sh /c-payne/mainboard.sh;;
+            3) cp /c-payne/mainboards/AMD_SERVER/GENOA/ASRock-Rack_GENOAD8HM3.sh /c-payne/mainboard.sh;;
+            4) cp /c-payne/mainboards/AMD_SERVER/GENOA/ASRock-Rack_GENOAD24QM32-2L2T.sh /c-payne/mainboard.sh;;
+            *) cp /c-payne/mainboards/AMD_SERVER/GENOA/generic_GENOA.sh /c-payne/mainboard.sh;;
+          esac ;;
+
+       *) cp /c-payne/mainboards/generic.sh /c-payne/mainboard.sh;;
+     esac ;;
+     
+  2) echo ''
+     echo ''
+     echo 'Please select your Platform!'
+     echo ''
+     echo '1) WRX80'
+     echo '2) WRX90'
+     echo '*) generic'
+     read m
+     case $m in
+       1) echo ''
+          echo 'Please select your Mainboard!'
+          echo ''
+          echo '1) Supermicro M12SWA-TF'
+          echo '2) Asus Pro WS WRX80E-SAGE SE WIFI'
+          echo '3) ASRock WRX80 Creator'
+          echo '4) ASRock-Rack WRX80D8-2T'
+          echo '5) Gigabyte WRX80-SU8-IPMI'
+          echo '6) Gigabyte WRX80-SU8-IPMI - Version 2'
+          echo '7) Gigabyte MC62-G40 (G41)'
+          echo '*) generic WRX80'         
+          read o
+          case $o in
+            1) cp /c-payne/mainboards/AMD_WORKSTATION/WRX80/Supermicro_M12SWA-TF.sh /c-payne/mainboard.sh;;
+            2) cp /c-payne/mainboards/AMD_WORKSTATION/WRX80/Asus_Pro_WS_WRX80E-SAGE_SE_WIFI.sh /c-payne/mainboard.sh;;          
+            3) cp /c-payne/mainboards/AMD_WORKSTATION/WRX80/ASRock_WRX80_Creator.sh /c-payne/mainboard.sh;;          
+            4) cp /c-payne/mainboards/AMD_WORKSTATION/WRX80/ASRock-Rack_WRX80D8-2T.sh /c-payne/mainboard.sh;;          
+            5) cp /c-payne/mainboards/AMD_WORKSTATION/WRX80/Gigabyte_WRX80-SU8-IPMI.sh /c-payne/mainboard.sh;;
+            6) cp /c-payne/mainboards/AMD_WORKSTATION/WRX80/Gigabyte_WRX80-SU8-IPMI_v2.sh /c-payne/mainboard.sh;;
+            7) cp /c-payne/mainboards/AMD_WORKSTATION/WRX80/Gigabyte_MC62-G40.sh /c-payne/mainboard.sh;;
+            *) cp /c-payne/mainboards/AMD_WORKSTATION/WRX80/generic_WRX80.sh /c-payne/mainboard.sh;;
+          esac ;;
+
+       2) echo ''
+          echo 'Please select your Mainboard!'
+          echo ''
+          echo '1) Asus Pro WS WRX90E-SAGE SE'
+          echo '2) Asus Pro WS WRX90E-SAGE SE v2'
+          echo '3) Asrock WRX90 WS EVO'
+          echo '*) generic WRX90'
+          read o
+          case $o in
+            1) cp /c-payne/mainboards/AMD_WORKSTATION/WRX90/Asus_Pro_WS_WRX90E-SAGE_SE.sh /c-payne/mainboard.sh;;
+            2) cp /c-payne/mainboards/AMD_WORKSTATION/WRX90/Asus_Pro_WS_WRX90E-SAGE_SE_v2.sh /c-payne/mainboard.sh;;
+            3) cp /c-payne/mainboards/AMD_WORKSTATION/WRX90/ASRock_WRX90_WS_EVO.sh /c-payne/mainboard.sh;;          
+            *) cp /c-payne/mainboards/AMD_WORKSTATION/WRX90/generic_WRX90.sh /c-payne/mainboard.sh;;
+          esac ;;
+
+       *) cp /c-payne/mainboards/generic.sh /c-payne/mainboard.sh;;
+     esac ;;
+
+  3) echo ''
+     echo 'Please select your Mainboard!'
+     echo ''
+     echo '1) AsRock X870 Pro RS'
+     echo '*) generic AMD Mainstream'
+     read m
+     case $m in
+       1) cp /c-payne/mainboards/AMD_MAINSTREAM/AsRock-X870_Pro_RS.sh /c-payne/mainboard.sh;;
+       *) cp /c-payne/mainboards/AMD_MAINSTREAM/generic_amd_mainstream.sh /c-payne/mainboard.sh;;
+     esac ;;  
+
+  4) echo ''
+     echo 'Please select your Mainboard!'
+     echo ''
+     echo '1) AsrockRack SP2C741D32G-2L+'
+     echo '*) generic Intel Server'
+     read m
+     case $m in
+       1) cp /c-payne/mainboards/INTEL_SERVER/SP2C741D32G-2L+.sh /c-payne/mainboard.sh;;
+       *) cp /c-payne/mainboards/generic.sh /c-payne/mainboard.sh;;
+     esac ;;  
+
+  5) echo ''
+     echo 'Please select your Mainboard!'
+     echo ''
+     echo '*) generic Intel Workstation'
+     read m
+     case $m in
+       *) cp /c-payne/mainboards/generic.sh /c-payne/mainboard.sh;;
+     esac ;;  
+
+  6) echo ''
+     echo 'Please select your Mainboard!'
+     echo ''
+     echo '*) generic Intel Mainstream'
+     read m
+     case $m in
+       *) cp /c-payne/mainboards/INTEL_MAINSTREAM/generic_intel_mainstream.sh /c-payne/mainboard.sh;;
+     esac ;;  
+ 
+  7) echo ''
+     echo 'Please Select your PCIe Switch Configuration!'
+     echo ''
+     echo '1) generic c-payne'
+     echo '2) generic c-payne - pagewise'
+     echo '3) PCIe gen4 Switch Backplane 5x x16 - 4W - CP-0520'
+     echo '4) PCIe gen4 Switch Backplane 4x x16 - 5W - CP-0522'
+     echo '5) PCIe gen5 MCIO Switch 52-Lane - CP-0550'
+     echo '6) PCIe gen5 MCIO Switch 100-Lane - CP-0551'
+     echo '*) generic Switch'
+     read m
+     case $m in
+       1) cp /c-payne/mainboards/PCIE_SWITCHES/generic_c-payne.sh /c-payne/mainboard.sh;;
+       2) cp /c-payne/mainboards/PCIE_SWITCHES/generic_c-payne_pagewise.sh /c-payne/mainboard.sh;;
+       3) cp /c-payne/mainboards/PCIE_SWITCHES/CP-0520.sh /c-payne/mainboard.sh;;
+       4) cp /c-payne/mainboards/PCIE_SWITCHES/CP-0522.sh /c-payne/mainboard.sh;;
+       5) cp /c-payne/mainboards/PCIE_SWITCHES/CP-0550.sh /c-payne/mainboard.sh;;
+       6) cp /c-payne/mainboards/PCIE_SWITCHES/CP-0551.sh /c-payne/mainboard.sh;;
+       *) cp /c-payne/mainboards/PCIE_SWITCHES/generic_switch.sh /c-payne/mainboard.sh;;
+     esac ;;  
+
+  *) cp /c-payne/mainboards/generic.sh /c-payne/mainboard.sh;;
+esac
+
+cp /c-payne/mainboard.sh /c-payne/page1_aer-stats/mainboard.sh
+cp /c-payne/mainboard.sh /c-payne/page2_margining/mainboard.sh
+cp /c-payne/mainboard.sh /c-payne/page3_registers/mainboard.sh
+cd /c-payne/page1_aer-stats/
+busybox sh ./mainboard.sh
+echo ''
+echo '1) Start bandwidth test'
+echo '*) Reselect Platform'
+read n
+case $n in
+  1) break;;
+  *) continue;;
+esac
+done
+
+clear
+setpci -d 10de: -s *:*.0 CAP_EXP+30.w=0x0020:0x0020 #disable autonomous speed
+setpci -d 10de: -s *:*.0 CAP_EXP+10.w=0x0200:0x0203 #disable autonomous width and ASPM
+insmod /modules/nvidia.ko
+insmod /modules/nvidia-uvm.ko
+
+oclBandwidthTest
+read -p "Press any key to launch stress test...... " -n1 -s
+
+echo tty1::once:/c-payne/page1_aer-stats/launch_page1_aer-stats.sh $revision > /etc/inittab
+echo tty2::once:/c-payne/page2_margining/launch_page2_margining.sh $revision >> /etc/inittab
+echo tty3::once:/c-payne/page3_registers/launch_page3_registers.sh $revision >> /etc/inittab
+echo tty4::respawn:/c-payne/launch_nvidia_smi.sh >> /etc/inittab
+echo tty5::once:/c-payne/launch_prime.sh >> /etc/inittab
+echo tty6::once:/c-payne/launch_oclPCIeStressTest.sh >> /etc/inittab
+echo tty7::once:/c-payne/launch_gpu_burn.sh >> /etc/inittab
+echo tty8::once:/c-payne/launch_nvmePCIeStressTest.sh >> /etc/inittab
+echo tty9::respawn:/bin/sh >> /etc/inittab
+echo tty10::respawn:/bin/sh >> /etc/inittab
+echo tty11::respawn:/bin/sh >> /etc/inittab
+echo tty12::respawn:/bin/sh >> /etc/inittab
+
+exec /linuxrc

@@ -1,0 +1,37 @@
+MIT License (applies to the shell/Python scripts and Docker packaging in this
+repository: preflight.sh, restore.sh, docker/*, c-payne/*.sh where noted below)
+
+Copyright (c) 2026 NexGen Cloud
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Third-party components in bin/ and c-payne/ retain their own licenses:
+
+- oclPCIeStressTest, oclBandwidthTest, Lane-Margining and the c-payne/ test
+  scripts are (C) C-Payne (c-payne.com), extracted from their freely
+  distributed PCIe Stress Test Tool image and redistributed here with
+  permission. All rights remain with C-Payne.
+- gpu_burn is (C) Ville Timonen, BSD-2-Clause, https://github.com/wili/gpu-burn
+  (compare.ptx is its result-check kernel).
+- mprime is Prime95 by GIMPS (mersenne.org), redistributed per its
+  free-distribution terms.
+- switchtec is the Microchip switchtec-user CLI (GPL-2.0),
+  https://github.com/Microsemi/switchtec-user
