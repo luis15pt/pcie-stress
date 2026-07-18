@@ -73,7 +73,13 @@ above to pin link speed/ASPM.
 
 ## Docker
 
-Build and run **on the GPU server** (needs nvidia-container-toolkit):
+Pull and run **on the GPU server** (needs nvidia-container-toolkit):
+
+```bash
+docker run --rm -it --privileged --gpus all ghcr.io/luis15pt/pcie-stress:latest full 900
+```
+
+Or build locally:
 
 ```bash
 docker build -t cpayne-test .
