@@ -86,6 +86,20 @@ docker run --rm -it --privileged --gpus all ghcr.io/luis15pt/pcie-stress:latest 
 Stages <=100 are %% of the card's own default limit (works on any GPU model);
 values >100 are absolute watts. Cards are always restored to 100%% afterwards.
 
+### Web dashboard (port 8080)
+
+```bash
+docker run --rm -it --privileged --gpus all -p 8080:8080 -e WEB_PORT=8080 \
+  ghcr.io/luis15pt/pcie-stress:latest            # sweep + live web UI
+docker run --rm -d --gpus all -p 8080:8080 \
+  ghcr.io/luis15pt/pcie-stress:latest web        # monitoring UI only, no load
+```
+
+Dark live dashboard at http://<host>:8080/ — per-GPU cards (util, temp, power,
+clocks, VRAM, fan, link, throttle badges, per-run AER delta) with 30-min history
+graphs, non-GPU AER table, event feed, and a page-wide red alert the moment any
+GPU drops off the bus. Fully self-contained (Chart.js baked into the image).
+
 ### Keeping logs when the container dies with the GPU
 
 1. Hosts you own (best): `echo '{"log-driver":"journald"}' | sudo tee /etc/docker/daemon.json && sudo systemctl restart docker` — every container's output survives removal; retrieve with `journalctl CONTAINER_NAME=<name>`.

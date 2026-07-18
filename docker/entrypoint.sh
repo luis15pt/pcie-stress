@@ -34,6 +34,13 @@ if [ -n "${LOG_URL:-}" ] && [ -n "$LOGFILE" ]; then
     done ) &
 fi
 
+# Web dashboard: set WEB_PORT=8080 (and -p 8080:8080) to serve the live
+# monitoring UI alongside any mode; or run mode "web" to serve it standalone.
+if [ -n "${WEB_PORT:-}" ] && [ "${1:-sweep}" != web ]; then
+  python3 ./docker/webui.py "$WEB_PORT" >/dev/null 2>&1 &
+  echo "Web UI on port ${WEB_PORT} (publish with -p ${WEB_PORT}:${WEB_PORT})"
+fi
+
 ngpus() { ls -d /proc/driver/nvidia/gpus/* 2>/dev/null | wc -l; }
 
 monitor() { # monitor [interval] — Rich dashboard, shell fallback
@@ -218,6 +225,7 @@ case "${1:-sweep}" in
   full)      full "${2:-1800}" ;;
   sweep)     sweep "${2:-80,90,100}" "${3:-}" ;;
   margin)    bin/Lane-Margining -s "$2" -t "containerized" ;;
+  web)       exec python3 ./docker/webui.py "${2:-8080}" ;;
   shell)     exec bash ;;
   *)         echo "unknown mode: $1"; exit 1 ;;
 esac

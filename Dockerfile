@@ -1,7 +1,7 @@
 FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      pciutils ocl-icd-libopencl1 libgmp10 kmod python3 python3-rich curl ca-certificates \
+      pciutils ocl-icd-libopencl1 libgmp10 kmod python3 python3-rich python3-flask curl ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /etc/OpenCL/vendors \
     && echo libnvidia-opencl.so.1 > /etc/OpenCL/vendors/nvidia.icd
@@ -9,7 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY bin/ /opt/cpayne/bin/
 COPY compare.ptx preflight.sh restore.sh /opt/cpayne/
 COPY c-payne/ /opt/cpayne/c-payne/
-COPY docker/entrypoint.sh docker/aer-watch.sh docker/aer_watch.py /opt/cpayne/docker/
+COPY docker/entrypoint.sh docker/aer-watch.sh docker/aer_watch.py docker/webui.py /opt/cpayne/docker/
+
+RUN mkdir -p /opt/cpayne/docker/static \
+    && curl -fsSL -o /opt/cpayne/docker/static/chart.umd.js \
+       https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js
 
 # drop bundled binaries that the host driver / distro packages must provide instead:
 # nvidia-smi (nvidia-container-toolkit injects the host's matching one),
@@ -21,6 +25,7 @@ RUN rm -f /opt/cpayne/bin/nvidia-smi /opt/cpayne/bin/busybox /opt/cpayne/bin/dd 
 ENV NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
+EXPOSE 8080
 WORKDIR /opt/cpayne
 ENTRYPOINT ["/opt/cpayne/docker/entrypoint.sh"]
 CMD ["sweep"]
