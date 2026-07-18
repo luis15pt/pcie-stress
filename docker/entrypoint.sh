@@ -58,7 +58,7 @@ full() { # full <seconds>
   dma_stress "$secs"
   nvme_stress "$secs"
   if [ -f ./docker/aer_watch.py ] && python3 -c 'import rich' 2>/dev/null; then
-    timeout --foreground "$secs" python3 ./docker/aer_watch.py 3
+    timeout --foreground "$secs" python3 ./docker/aer_watch.py 2
   else
     timeout --foreground "$secs" ./docker/aer-watch.sh 3
   fi
