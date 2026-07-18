@@ -21,9 +21,16 @@ if [ -n "$LOGFILE" ]; then
   exec > >(tee -a "$LOGFILE") 2>&1
 fi
 if [ -n "${LOG_URL:-}" ] && [ -n "$LOGFILE" ]; then
-  ( while sleep 60; do
-      curl -fsS -X POST -H 'Content-Type: text/plain' \
-        --data-binary @"$LOGFILE" "$LOG_URL" >/dev/null 2>&1 || true
+  ( off=0
+    while sleep 15; do
+      sz=$(stat -c%s "$LOGFILE" 2>/dev/null || echo 0)
+      if [ "$sz" -gt "$off" ]; then
+        if tail -c +$((off + 1)) "$LOGFILE" | curl -fsS -X POST \
+             -H 'Content-Type: text/plain' -H "X-Log-Offset: $off" \
+             --data-binary @- "$LOG_URL" >/dev/null 2>&1; then
+          off=$sz
+        fi
+      fi
     done ) &
 fi
 
@@ -128,7 +135,7 @@ sweep() { # sweep <stages: % of default limit (or watts if >100)> <dwell seconds
     set_limits "$stage"
     bin/gpu_burn -tc "$dwell" >/tmp/gpu_burn.log 2>&1 &
     dma_stress "$dwell"
-    python3 ./docker/aer_watch.py 10 < /dev/null | cat &   # pipe forces log mode
+    python3 ./docker/aer_watch.py 2 < /dev/null | cat &   # pipe forces log mode
     local mon_pid=$!
     elapsed=0
     while [ "$elapsed" -lt "$dwell" ]; do
