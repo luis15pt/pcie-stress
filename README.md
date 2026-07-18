@@ -38,7 +38,7 @@ system shows 0 AER errors and full speed/width on every slot after hours of load
 
 - `oclPCIeStressTest`, `oclBandwidthTest`, `Lane-Margining` — C-Payne's own (closed
   source, but small; dynamically linked against libOpenCL/libpci).
-- `gpu_burn` (+ `compare.ptx` in root) — open source, https://github.com/wili/gpu-burn
+- `gpu_burn` (+ `compare.ptx` in root) — open source, https://github.com/wilicc/gpu-burn
 - `mprime` — Prime95. `switchtec` — Microchip switchtec-user CLI.
 - Redistributed with permission from C-Payne; see LICENSE for third-party terms.
 - `lspci`/`setpci` come from your distro (`apt install pciutils`).

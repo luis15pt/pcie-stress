@@ -29,7 +29,7 @@ Third-party components in bin/ and c-payne/ retain their own licenses:
   scripts are (C) C-Payne (c-payne.com), extracted from their freely
   distributed PCIe Stress Test Tool image and redistributed here with
   permission. All rights remain with C-Payne.
-- gpu_burn is (C) Ville Timonen, BSD-2-Clause, https://github.com/wili/gpu-burn
+- gpu_burn is (C) Ville Timonen, BSD-2-Clause, https://github.com/wilicc/gpu-burn
   (compare.ptx is its result-check kernel).
 - mprime is Prime95 by GIMPS (mersenne.org), redistributed per its
   free-distribution terms.
