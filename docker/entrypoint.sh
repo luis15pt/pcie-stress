@@ -120,16 +120,19 @@ set_limits() { # set_limits <stage>  — stage <=100 means % of each GPU's defau
 }
 
 sweep() { # sweep <stages: % of default limit (or watts if >100)> <dwell seconds per stage>
-  local stages=${1:-80,90,100} dwell=${2:-3600}
-  local n_start baseline stage elapsed failed_at="" results=""
+  local stages=${1:-80,90,100} dwell=${2:-}
+  local n_start baseline stage elapsed failed_at="" results="" can_set=1
   n_start=$(ngpus)
-  echo "POWER SWEEP: stages=${stages} (% of each GPU's default limit) dwell=${dwell}s/stage gpus=${n_start}"
-  local can_set=1
   if ! set_limits 100 >/dev/null 2>&1; then
     can_set=0
     stages="current"
+    [ -z "$dwell" ] && dwell=86400   # single-stage fallback: 24h soak by default
+  fi
+  [ -z "$dwell" ] && dwell=3600
+  echo "POWER SWEEP: stages=${stages} (% of each GPU's default limit) dwell=${dwell}s/stage gpus=${n_start}"
+  if [ "$can_set" -eq 0 ]; then
     echo 'WARN: cannot set power limits (managed pod / no admin rights on GPU).'
-    echo 'Falling back to a SINGLE stage at the current limits:'
+    echo "Falling back to a SINGLE ${dwell}s stage at the current limits:"
     nvidia-smi --query-gpu=index,power.limit,power.default_limit --format=csv,noheader 2>/dev/null | sed 's/^/  GPU /'
   fi
   for stage in ${stages//,/ }; do
@@ -213,7 +216,7 @@ case "${1:-sweep}" in
   dma)       dma_stress "${2:-1800}"; wait ;;
   nvme)      nvme_stress "${2:-1800}"; wait ;;
   full)      full "${2:-1800}" ;;
-  sweep)     sweep "${2:-80,90,100}" "${3:-3600}" ;;
+  sweep)     sweep "${2:-80,90,100}" "${3:-}" ;;
   margin)    bin/Lane-Margining -s "$2" -t "containerized" ;;
   shell)     exec bash ;;
   *)         echo "unknown mode: $1"; exit 1 ;;
