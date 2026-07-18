@@ -355,6 +355,7 @@ def log_mode(base: dict, interval: float, stop: list, trk: Tracker) -> None:
                   f"aer=+{d} thr={fmt_flags(flags)}", flush=True)
         for e in events:
             print(e, flush=True)
+        print("-" * 72, flush=True)
         time.sleep(interval)
 
 
