@@ -44,9 +44,11 @@ nvme_stress() { # nvme_stress <seconds>
   [ $found -eq 0 ] && echo 'No NVMe devices visible (mount /dev or use --privileged).'
 }
 
-burn() { # burn <seconds>
-  echo "gpu_burn (tensor cores) for ${1}s ..."
-  bin/gpu_burn -tc "$1"
+burn() { # burn <seconds> [extra gpu_burn flags...] — flags default to -tc
+  local secs=$1; shift
+  local flags=("$@"); [ ${#flags[@]} -eq 0 ] && flags=(-tc)
+  echo "gpu_burn ${flags[*]} for ${secs}s ..."
+  bin/gpu_burn "${flags[@]}" "$secs"
 }
 
 full() { # full <seconds>
@@ -108,7 +110,7 @@ case "${1:-menu}" in
   preflight) ./preflight.sh ;;
   watch)     monitor "${2:-3}" ;;
   bandwidth) bin/oclBandwidthTest ;;
-  burn)      burn "${2:-300}" ;;
+  burn)      shift; burn "${1:-300}" "${@:2}" ;;
   dma)       dma_stress "${2:-1800}"; wait ;;
   nvme)      nvme_stress "${2:-1800}"; wait ;;
   full)      full "${2:-1800}" ;;
