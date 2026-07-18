@@ -427,6 +427,8 @@ def summary(base: dict, trk: Tracker) -> None:
 
 def main() -> None:
     interval = float(sys.argv[1]) if len(sys.argv) > 1 else 2.0
+    if not console.is_terminal:
+        console.width = 160  # Rich defaults to 80 cols without a TTY; keep tables readable
     base = snapshot()
     if not base:
         console.print("[bold red]No AER counters in /sys — need --privileged and OS-native AER (BIOS).[/]")
