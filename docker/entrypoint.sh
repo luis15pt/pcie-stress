@@ -124,15 +124,19 @@ sweep() { # sweep <stages: % of default limit (or watts if >100)> <dwell seconds
   local n_start baseline stage elapsed failed_at="" results=""
   n_start=$(ngpus)
   echo "POWER SWEEP: stages=${stages} (% of each GPU's default limit) dwell=${dwell}s/stage gpus=${n_start}"
-  if ! set_limits 100; then
-    echo 'ERROR: cannot set power limits (needs admin rights on the GPU - --privileged, or root on the host).'
-    return 1
+  local can_set=1
+  if ! set_limits 100 >/dev/null 2>&1; then
+    can_set=0
+    stages="current"
+    echo 'WARN: cannot set power limits (managed pod / no admin rights on GPU).'
+    echo 'Falling back to a SINGLE stage at the current limits:'
+    nvidia-smi --query-gpu=index,power.limit,power.default_limit --format=csv,noheader 2>/dev/null | sed 's/^/  GPU /'
   fi
   for stage in ${stages//,/ }; do
     baseline=$(new_dropouts)
     echo ''
     echo "=== stage: ${stage} for ${dwell}s ==="
-    set_limits "$stage"
+    [ "$can_set" -eq 1 ] && set_limits "$stage"
     bin/gpu_burn -tc "$dwell" >/tmp/gpu_burn.log 2>&1 &
     dma_stress "$dwell"
     python3 ./docker/aer_watch.py 2 < /dev/null | cat &   # pipe forces log mode
@@ -157,7 +161,7 @@ sweep() { # sweep <stages: % of default limit (or watts if >100)> <dwell seconds
     echo "PASS: stage ${stage} held for ${dwell}s"
     sleep 10   # settle between stages
   done
-  set_limits 100 >/dev/null 2>&1   # always leave the cards at their default max
+  [ "$can_set" -eq 1 ] && set_limits 100 >/dev/null 2>&1   # always leave the cards at their default max
   echo ''
   echo '=== POWER SWEEP RESULT ==='
   printf "%b" "$results"
