@@ -7,7 +7,7 @@ cd /opt/cpayne
 ngpus() { ls -d /proc/driver/nvidia/gpus/* 2>/dev/null | wc -l; }
 
 monitor() { # monitor [interval] — Rich dashboard, shell fallback
-  if python3 -c 'import rich' 2>/dev/null; then
+  if [ -f ./docker/aer_watch.py ] && python3 -c 'import rich' 2>/dev/null; then
     python3 ./docker/aer_watch.py "${1:-3}"
   else
     ./docker/aer-watch.sh "${1:-3}"
@@ -57,7 +57,7 @@ full() { # full <seconds>
   bin/gpu_burn -tc "$secs" >/tmp/gpu_burn.log 2>&1 &
   dma_stress "$secs"
   nvme_stress "$secs"
-  if python3 -c 'import rich' 2>/dev/null; then
+  if [ -f ./docker/aer_watch.py ] && python3 -c 'import rich' 2>/dev/null; then
     timeout --foreground "$secs" python3 ./docker/aer_watch.py 3
   else
     timeout --foreground "$secs" ./docker/aer-watch.sh 3

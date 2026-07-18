@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY bin/ /opt/cpayne/bin/
 COPY compare.ptx preflight.sh restore.sh /opt/cpayne/
 COPY c-payne/ /opt/cpayne/c-payne/
-COPY docker/entrypoint.sh docker/aer-watch.sh /opt/cpayne/docker/
+COPY docker/entrypoint.sh docker/aer-watch.sh docker/aer_watch.py /opt/cpayne/docker/
 
 # drop bundled binaries that the host driver / distro packages must provide instead:
 # nvidia-smi (nvidia-container-toolkit injects the host's matching one),
