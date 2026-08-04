@@ -112,9 +112,10 @@ rotate_ring() {
 }
 
 # ---------- detection -------------------------------------------------------
+START_TS=$(date +%s)   # ring persists across reboots: only trust lines from THIS run
 dead_gpus_from_ring() { # GPU ids whose latest XID field ($NF) is numeric >0
-  tail -n 200 "$TEL" 2>/dev/null | awk '
-    $2=="GPU" && $NF ~ /^[0-9]+$/ && $NF+0 > 0 { bad[$3]=$NF }
+  tail -n 400 "$TEL" 2>/dev/null | awk -v t0="$START_TS" '
+    $1+0 >= t0 && $2=="GPU" && $NF ~ /^[0-9]+$/ && $NF+0 > 0 { bad[$3]=$NF }
     END { for (g in bad) print g":"bad[g] }'
 }
 
