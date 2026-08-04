@@ -1,0 +1,17 @@
+[Unit]
+Description=GPU dropout incident recorder (telemetry ring + forensic capture)
+After=multi-user.target nvidia-dcgm.service
+Wants=nvidia-dcgm.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gpu-dropout-recorder.sh
+Restart=always
+RestartSec=10
+Nice=10
+# the recorder's own output is tiny; telemetry goes to DATA_DIR, not the journal
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -106,6 +106,41 @@ GPU drops off the bus. Fully self-contained (Chart.js baked into the image).
 2. Manual runs: add `-v /var/log/pcie-stress:/log` — output teed to a timestamped file.
 3. Managed pods (RunPod etc.): set `-e LOG_URL=https://your-endpoint` — the log is re-POSTed there every 60s.
 
+## Host incident recorder (always-on watchdog)
+
+The container tests on demand; the recorder watches 24/7 and captures the
+forensics we kept losing (three dropouts across the fleet left no telemetry:
+journals rotated, container logs deleted, nobody noticed for days).
+
+```bash
+sudo host/install.sh --journald-cap     # installs systemd service gpu-dropout-recorder
+sudo vi /etc/gpu-dropout-recorder.conf  # set WEBHOOK_URL (+ optional IPMI creds)
+sudo systemctl restart gpu-dropout-recorder
+```
+
+What it does:
+
+- **Telemetry ring**: streams `dcgmi dmon` at 5Hz (power, temps incl. VRAM,
+  clocks, util, throttle mask, PCIe replay, XID) to
+  `/var/log/gpu-recorder/telemetry.csv` (2 x 100MB generations). DCGM stays
+  responsive with a dead GPU (verified on live casualties); nvidia-smi — which
+  hangs against dead GPUs — is only a fallback and always timeout-wrapped.
+- **Detection** within seconds via DCGM XID field 230 (dead-GPU signature:
+  `POWER=N/A SMCLK=N/A XIDER=79`), kernel-log counters (rotation-immune),
+  nvidia-smi GPU count, and sampler-stall supervision.
+- **Incident bundle** to `/var/log/gpu-recorder/incident-<host>-<ts>/`:
+  pre-death telemetry tail, kernel logs, full AER counter dump (they reset on
+  reboot!), lspci state (the `7f`), nvidia-smi + GPU serial/UUID map (for
+  card-swap tracking), DCGM cached-values snapshot (dead GPUs keep last-known
+  temp/power — the value at death), `nvidia-bug-report.log.gz` (--safe-mode),
+  meta.json. Oldest bundles pruned beyond 10.
+- **Webhook** (Slack-compatible JSON) on every incident; silent if unset.
+- Test end-to-end: `sudo kill -USR1 $(systemctl show -p MainPID --value gpu-dropout-recorder)`
+  forces a capture with reason `manual-test`.
+
+Honest limits: power.draw is a ~1s-averaged counter — ms-scale rail transients
+are only visible to the BMC/PSU (enable the optional IPMI sampler) or a scope.
+
 Or build locally:
 
 ```bash
