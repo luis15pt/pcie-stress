@@ -187,7 +187,7 @@ capture_incident() { # capture_incident <reason> <dead-ids>
     printf '{"host":"%s","time":"%s","boot":"%s","reason":"%s","dead_gpus":"%s",' \
       "$(hostname)" "$(date -Is)" "$(uptime -s)" "$reason" "$dead"
     printf '"driver":"%s","recorder_mode":"%s"}\n' \
-      "$(cat /proc/driver/nvidia/version 2>/dev/null | head -1 | tr -s ' ' | cut -d' ' -f8)" "$MODE"
+      "$(grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' /proc/driver/nvidia/version 2>/dev/null | head -1)" "$MODE"
   } > "$dir/meta.json"
 
   # prune old bundles
@@ -224,6 +224,7 @@ TICK=0
 LAST_SIZE=0
 STALL=0
 STALL_FIRED=0
+CLEAR=0
 while true; do
   sleep "$INTERVAL"
   TICK=$((TICK + 1))
@@ -278,12 +279,20 @@ while true; do
     [ "$reason" = "manual-test" ] || ARMED=0
   fi
 
-  # re-arm once the dead signature clears (post power-cycle recovery)
+  # re-arm once the dead signature clears (post power-cycle recovery).
+  # Require CLEAR_NEEDED consecutive clean ticks: a single clean read can be a
+  # race with ring rotation (fresh file briefly missing dead-GPU rows), which
+  # caused re-arm/re-fire flapping every rotation period.
   if [ "$ARMED" = 0 ]; then
     if [ -z "$(dead_gpus_from_ring)" ] && { [ "$MODE" = none ] || [ "$(gpu_count)" -ge "$BASE_COUNT" ]; }; then
-      ARMED=1
-      BASE_DROPS=$(kernel_dropout_count); BASE_XIDS=$(kernel_xid_count)
-      log "re-armed: GPUs recovered"
+      CLEAR=$((CLEAR + 1))
+      if [ "$CLEAR" -ge "${CLEAR_NEEDED:-6}" ]; then
+        ARMED=1; CLEAR=0
+        BASE_DROPS=$(kernel_dropout_count); BASE_XIDS=$(kernel_xid_count)
+        log "re-armed: GPUs recovered"
+      fi
+    else
+      CLEAR=0
     fi
   fi
 done
