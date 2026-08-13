@@ -250,10 +250,17 @@ while true; do
     fi
   fi
 
-  # 3. GPU count via nvidia-smi (every Nth tick; dead GPUs vanish from -L)
+  # 3. GPU count via nvidia-smi (every Nth tick; dead GPUs vanish from -L).
+  # Baseline auto-raises: if the service started while a GPU was dead and the
+  # card later recovers (reset/reboot), the higher count becomes the new floor.
   if [ -z "$reason" ] && [ "$ARMED" = 1 ] && [ $((TICK % COUNT_CHECK_EVERY)) = 0 ] && [ "$MODE" != none ]; then
     c=$(gpu_count)
-    if [ "$c" -lt "$BASE_COUNT" ] && [ "$c" -ge 0 ]; then reason="gpu-count($c<$BASE_COUNT)"; fi
+    if [ "$c" -gt "$BASE_COUNT" ]; then
+      BASE_COUNT=$c
+      log "GPU-count baseline raised to $c"
+    elif [ "$c" -lt "$BASE_COUNT" ] && [ "$c" -ge 0 ]; then
+      reason="gpu-count($c<$BASE_COUNT)"
+    fi
   fi
 
   # 4. sampler stall -> restart; 3 consecutive stalls while armed = incident.
