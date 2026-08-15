@@ -1,0 +1,12 @@
+[Unit]
+Description=GPU-temperature-driven chassis fan control (BMC/IPMI)
+After=multi-user.target nvidia-dcgm.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gpu-fan-control.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -9,6 +9,9 @@ cd "$(dirname "$0")"
 [ "$(id -u)" = 0 ] || { echo "run as root: sudo $0"; exit 1; }
 
 install -m 755 gpu-dropout-recorder.sh /usr/local/bin/gpu-dropout-recorder.sh
+install -m 755 gpu-fan-control.sh /usr/local/bin/gpu-fan-control.sh
+install -m 644 gpu-fan-control.service /etc/systemd/system/gpu-fan-control.service
+if [ ! -f /etc/gpu-fan-control.conf ]; then install -m 644 gpu-fan-control.conf /etc/gpu-fan-control.conf; fi
 install -m 644 gpu-dropout-recorder.service /etc/systemd/system/gpu-dropout-recorder.service
 if [ ! -f /etc/gpu-dropout-recorder.conf ]; then
   install -m 600 gpu-dropout-recorder.conf /etc/gpu-dropout-recorder.conf
