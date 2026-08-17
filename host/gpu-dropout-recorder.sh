@@ -24,6 +24,7 @@ RING_MAX_MB=${RING_MAX_MB:-100}       # telemetry ring generation size
 MAX_BUNDLES=${MAX_BUNDLES:-10}
 TAIL_LINES=${TAIL_LINES:-300000}      # telemetry lines kept in a bundle (~2h at 5Hz x 5-8 GPUs)
 IPMI_HOST=${IPMI_HOST:-}; IPMI_USER=${IPMI_USER:-}; IPMI_PASS=${IPMI_PASS:-}
+VRAM_TOOL=${VRAM_TOOL:-/usr/local/bin/gddr6}   # BAR-level GDDR VRAM hotspot reader (optional)
 IPMI_INTERVAL=${IPMI_INTERVAL:-30}
 COUNT_CHECK_EVERY=${COUNT_CHECK_EVERY:-6}   # GPU-count check every N detector ticks
 
@@ -33,6 +34,7 @@ DCGM_FIELDS="100,101,112,140,150,155,190,203,204,202,230"
 
 TEL="$DATA_DIR/telemetry.csv"
 BMC="$DATA_DIR/bmc.csv"
+VRAM="$DATA_DIR/vram.csv"
 mkdir -p "$DATA_DIR"
 
 log() { echo "$(date -Is) $*"; }
@@ -85,6 +87,21 @@ stop_sampler() {
   pkill -f 'nvidia-smi --query-gpu=.*-lms' 2>/dev/null
 }
 
+vram_loop() { # GDDR VRAM hotspot via gddr6 tool (NVML/DCGM report 0 on GeForce)
+  [ -x "$VRAM_TOOL" ] || return
+  log "VRAM sampler enabled ($VRAM_TOOL)"
+  while true; do
+    stdbuf -oL "$VRAM_TOOL" 2>/dev/null | tr "\r" "\n" | while IFS= read -r line; do
+      case "$line" in
+        Device:*)      printf "# %s %s\n" "$(date +%s)" "$line" >> "$VRAM" ;;
+        "VRAM Temps:"*) t=$(echo "$line" | grep -oE "[0-9]+°C" | tr -d "°C" | paste -sd" ")
+                        [ -n "$t" ] && printf "%s VRAMHOT %s\n" "${EPOCHREALTIME:-$(date +%s)}" "$t" >> "$VRAM" ;;
+      esac
+    done
+    sleep 10   # tool exited; retry
+  done
+}
+
 ipmi_loop() {
   local args=()
   if [ -n "$IPMI_HOST" ]; then
@@ -102,7 +119,7 @@ ipmi_loop() {
 
 rotate_ring() {
   local f
-  for f in "$TEL" "$BMC"; do
+  for f in "$TEL" "$BMC" "$VRAM"; do
     [ -f "$f" ] || continue
     if [ "$(stat -c%s "$f" 2>/dev/null || echo 0)" -gt $((RING_MAX_MB * 1024 * 1024)) ]; then
       mv -f "$f" "$f.1"
@@ -146,6 +163,7 @@ capture_incident() { # capture_incident <reason> <dead-ids>
   # pre-death telemetry window (the data we never had)
   cat "$TEL.1" "$TEL" 2>/dev/null | tail -n "$TAIL_LINES" > "$dir/telemetry-tail.csv"
   [ -f "$BMC" ] && cat "$BMC.1" "$BMC" 2>/dev/null | tail -n 20000 > "$dir/bmc-tail.csv"
+  [ -f "$VRAM" ] && cat "$VRAM.1" "$VRAM" 2>/dev/null | tail -n 20000 > "$dir/vram-tail.csv"
 
   # DCGM cached snapshot (dead GPUs keep last-known values, e.g. temp at death)
   [ "$MODE" = dcgm ] && timeout 20 dcgmi dmon -e "$DCGM_FIELDS" -c 1 > "$dir/dcgm-snapshot.txt" 2>&1
@@ -204,6 +222,7 @@ trap 'stop_sampler; exit 0' TERM INT
 
 start_sampler
 ipmi_loop &
+vram_loop &
 refresh_gpu_map
 
 BASE_DROPS=$(kernel_dropout_count)
