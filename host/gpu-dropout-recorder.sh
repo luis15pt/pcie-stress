@@ -91,7 +91,7 @@ vram_loop() { # GDDR VRAM hotspot via gddr6 tool (NVML/DCGM report 0 on GeForce)
   [ -x "$VRAM_TOOL" ] || return
   log "VRAM sampler enabled ($VRAM_TOOL)"
   while true; do
-    stdbuf -oL "$VRAM_TOOL" 2>/dev/null | tr "\r" "\n" | while IFS= read -r line; do
+    stdbuf -o0 "$VRAM_TOOL" 2>/dev/null | tr "\r" "\n" | while IFS= read -r line; do
       case "$line" in
         Device:*)      printf "# %s %s\n" "$(date +%s)" "$line" >> "$VRAM" ;;
         "VRAM Temps:"*) t=$(echo "$line" | grep -oE "[0-9]+°C" | tr -d "°C" | paste -sd" ")
