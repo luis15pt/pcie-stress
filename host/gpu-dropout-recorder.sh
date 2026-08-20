@@ -91,9 +91,10 @@ vram_loop() { # GDDR VRAM hotspot via gddr6 tool (NVML/DCGM report 0 on GeForce)
   [ -x "$VRAM_TOOL" ] || return
   log "VRAM sampler enabled ($VRAM_TOOL)"
   while true; do
-    stdbuf -o0 "$VRAM_TOOL" 2>/dev/null | tr "\r" "\n" | while IFS= read -r line; do
+    stdbuf -o0 "$VRAM_TOOL" 2>/dev/null | stdbuf -i0 -o0 tr "\r" "\n" | while IFS= read -r line; do
       case "$line" in
-        Device:*)      printf "# %s %s\n" "$(date +%s)" "$line" >> "$VRAM" ;;
+        Device:*)      printf "# %s %s\n" "$(date +%s)" "$line" >> "$VRAM"
+                       printf "%s %s\n" "$(date +%s)" "$line" >> "$DATA_DIR/vram-order.txt" ;;
         "VRAM Temps:"*) t=$(echo "$line" | grep -oE "[0-9]+°C" | tr -d "°C" | paste -sd" ")
                         [ -n "$t" ] && printf "%s VRAMHOT %s\n" "${EPOCHREALTIME:-$(date +%s)}" "$t" >> "$VRAM" ;;
       esac
@@ -163,7 +164,7 @@ capture_incident() { # capture_incident <reason> <dead-ids>
   # pre-death telemetry window (the data we never had)
   cat "$TEL.1" "$TEL" 2>/dev/null | tail -n "$TAIL_LINES" > "$dir/telemetry-tail.csv"
   [ -f "$BMC" ] && cat "$BMC.1" "$BMC" 2>/dev/null | tail -n 20000 > "$dir/bmc-tail.csv"
-  [ -f "$VRAM" ] && cat "$VRAM.1" "$VRAM" 2>/dev/null | tail -n 20000 > "$dir/vram-tail.csv"
+  [ -f "$VRAM" ] && { tail -n 20 "$DATA_DIR/vram-order.txt" 2>/dev/null | sed "s/^/# order: /"; cat "$VRAM.1" "$VRAM" 2>/dev/null | tail -n 20000; } > "$dir/vram-tail.csv"
 
   # DCGM cached snapshot (dead GPUs keep last-known values, e.g. temp at death)
   [ "$MODE" = dcgm ] && timeout 20 dcgmi dmon -e "$DCGM_FIELDS" -c 1 > "$dir/dcgm-snapshot.txt" 2>&1
