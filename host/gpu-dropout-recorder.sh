@@ -131,9 +131,12 @@ rotate_ring() {
 
 # ---------- detection -------------------------------------------------------
 START_TS=$(date +%s)   # ring persists across reboots: only trust lines from THIS run
-dead_gpus_from_ring() { # GPU ids whose latest XID field ($NF) is numeric >0
+dead_gpus_from_ring() { # GPU ids whose XID field is numeric >0 in a COMPLETE line
+  # NF==14 guard: the ring is tailed while the sampler writes, and a torn
+  # partial line can end at any numeric column (memclk 405 once read as an
+  # "XID 405" false positive). Only trust lines with all 14 fields.
   tail -n 400 "$TEL" 2>/dev/null | awk -v t0="$START_TS" '
-    $1+0 >= t0 && $2=="GPU" && $NF ~ /^[0-9]+$/ && $NF+0 > 0 { bad[$3]=$NF }
+    NF == 14 && $1+0 >= t0 && $2=="GPU" && $14 ~ /^[0-9]+$/ && $14+0 > 0 { bad[$3]=$14 }
     END { for (g in bad) print g":"bad[g] }'
 }
 
