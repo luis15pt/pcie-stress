@@ -25,6 +25,8 @@ MAX_BUNDLES=${MAX_BUNDLES:-10}
 TAIL_LINES=${TAIL_LINES:-300000}      # telemetry lines kept in a bundle (~2h at 5Hz x 5-8 GPUs)
 IPMI_HOST=${IPMI_HOST:-}; IPMI_USER=${IPMI_USER:-}; IPMI_PASS=${IPMI_PASS:-}
 VRAM_TOOL=${VRAM_TOOL:-/usr/local/bin/gddr6}   # BAR-level GDDR VRAM hotspot reader (optional)
+PSU_URL=${PSU_URL:-http://localhost:9101/metrics}  # octoserver PSU exporter (all PSUs incl. ones the BMC cannot see)
+PSU_INTERVAL=${PSU_INTERVAL:-10}
 IPMI_INTERVAL=${IPMI_INTERVAL:-30}
 COUNT_CHECK_EVERY=${COUNT_CHECK_EVERY:-6}   # GPU-count check every N detector ticks
 
@@ -35,6 +37,7 @@ DCGM_FIELDS="100,101,112,140,150,155,190,203,204,202,230"
 TEL="$DATA_DIR/telemetry.csv"
 BMC="$DATA_DIR/bmc.csv"
 VRAM="$DATA_DIR/vram.csv"
+PSU="$DATA_DIR/psu.csv"
 mkdir -p "$DATA_DIR"
 
 log() { echo "$(date -Is) $*"; }
@@ -103,6 +106,21 @@ vram_loop() { # GDDR VRAM hotspot via gddr6 tool (NVML/DCGM report 0 on GeForce)
   done
 }
 
+psu_loop() { # per-PSU output/status from the local exporter (BMC often exposes only a subset)
+  curl -s --max-time 5 "$PSU_URL" >/dev/null 2>&1 || return
+  log "PSU sampler enabled ($PSU_URL every ${PSU_INTERVAL}s)"
+  while true; do
+    curl -s --max-time 8 "$PSU_URL" 2>/dev/null | awk -v ts="$(date +%s)" '
+      /^octoserver_psu_(output_power_watts|output_voltage_volts|status_ok|input_voltage_volts|temperature_celsius|fan_speed_rpm)\{/ {
+        m=$0; sub(/\{.*/,"",m); sub(/^octoserver_psu_/,"",m)
+        p=""; if (match($0, /psu="[^"]+"/)) { p=substr($0,RSTART+5,RLENGTH-6) }
+        s=""; if (match($0, /status="[^"]+"/)) { s=substr($0,RSTART+8,RLENGTH-9) }
+        print ts, "PSU", p, m, $NF, s
+      }' >> "$PSU"
+    sleep "$PSU_INTERVAL"
+  done
+}
+
 ipmi_loop() {
   local args=()
   if [ -n "$IPMI_HOST" ]; then
@@ -120,7 +138,7 @@ ipmi_loop() {
 
 rotate_ring() {
   local f
-  for f in "$TEL" "$BMC" "$VRAM"; do
+  for f in "$TEL" "$BMC" "$VRAM" "$PSU"; do
     [ -f "$f" ] || continue
     if [ "$(stat -c%s "$f" 2>/dev/null || echo 0)" -gt $((RING_MAX_MB * 1024 * 1024)) ]; then
       mv -f "$f" "$f.1"
@@ -131,12 +149,9 @@ rotate_ring() {
 
 # ---------- detection -------------------------------------------------------
 START_TS=$(date +%s)   # ring persists across reboots: only trust lines from THIS run
-dead_gpus_from_ring() { # GPU ids whose XID field is numeric >0 in a COMPLETE line
-  # NF==14 guard: the ring is tailed while the sampler writes, and a torn
-  # partial line can end at any numeric column (memclk 405 once read as an
-  # "XID 405" false positive). Only trust lines with all 14 fields.
+dead_gpus_from_ring() { # GPU ids whose latest XID field ($NF) is numeric >0
   tail -n 400 "$TEL" 2>/dev/null | awk -v t0="$START_TS" '
-    NF == 14 && $1+0 >= t0 && $2=="GPU" && $14 ~ /^[0-9]+$/ && $14+0 > 0 { bad[$3]=$14 }
+    $1+0 >= t0 && $2=="GPU" && $NF ~ /^[0-9]+$/ && $NF+0 > 0 { bad[$3]=$NF }
     END { for (g in bad) print g":"bad[g] }'
 }
 
@@ -167,6 +182,7 @@ capture_incident() { # capture_incident <reason> <dead-ids>
   # pre-death telemetry window (the data we never had)
   cat "$TEL.1" "$TEL" 2>/dev/null | tail -n "$TAIL_LINES" > "$dir/telemetry-tail.csv"
   [ -f "$BMC" ] && cat "$BMC.1" "$BMC" 2>/dev/null | tail -n 20000 > "$dir/bmc-tail.csv"
+  [ -f "$PSU" ] && cat "$PSU.1" "$PSU" 2>/dev/null | tail -n 20000 > "$dir/psu-tail.csv"
   [ -f "$VRAM" ] && { tail -n 20 "$DATA_DIR/vram-order.txt" 2>/dev/null | sed "s/^/# order: /"; cat "$VRAM.1" "$VRAM" 2>/dev/null | tail -n 20000; } > "$dir/vram-tail.csv"
 
   # DCGM cached snapshot (dead GPUs keep last-known values, e.g. temp at death)
@@ -227,6 +243,7 @@ trap 'stop_sampler; exit 0' TERM INT
 start_sampler
 ipmi_loop &
 vram_loop &
+psu_loop &
 refresh_gpu_map
 
 BASE_DROPS=$(kernel_dropout_count)
