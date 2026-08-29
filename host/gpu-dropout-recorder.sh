@@ -26,7 +26,7 @@ TAIL_LINES=${TAIL_LINES:-300000}      # telemetry lines kept in a bundle (~2h at
 IPMI_HOST=${IPMI_HOST:-}; IPMI_USER=${IPMI_USER:-}; IPMI_PASS=${IPMI_PASS:-}
 VRAM_TOOL=${VRAM_TOOL:-/usr/local/bin/gddr6}   # BAR-level GDDR VRAM hotspot reader (optional)
 PSU_URL=${PSU_URL:-http://localhost:9101/metrics}  # octoserver PSU exporter (all PSUs incl. ones the BMC cannot see)
-PSU_INTERVAL=${PSU_INTERVAL:-10}
+PSU_INTERVAL=${PSU_INTERVAL:-60}
 IPMI_INTERVAL=${IPMI_INTERVAL:-30}
 COUNT_CHECK_EVERY=${COUNT_CHECK_EVERY:-6}   # GPU-count check every N detector ticks
 
@@ -107,10 +107,10 @@ vram_loop() { # GDDR VRAM hotspot via gddr6 tool (NVML/DCGM report 0 on GeForce)
 }
 
 psu_loop() { # per-PSU output/status from the local exporter (BMC often exposes only a subset)
-  curl -s --max-time 5 "$PSU_URL" >/dev/null 2>&1 || return
+  curl -s --max-time 30 "$PSU_URL" >/dev/null 2>&1 || return
   log "PSU sampler enabled ($PSU_URL every ${PSU_INTERVAL}s)"
   while true; do
-    curl -s --max-time 8 "$PSU_URL" 2>/dev/null | awk -v ts="$(date +%s)" '
+    curl -s --max-time 30 "$PSU_URL" 2>/dev/null | awk -v ts="$(date +%s)" '
       /^octoserver_psu_(output_power_watts|output_voltage_volts|status_ok|input_voltage_volts|temperature_celsius|fan_speed_rpm)\{/ {
         m=$0; sub(/\{.*/,"",m); sub(/^octoserver_psu_/,"",m)
         p=""; if (match($0, /psu="[^"]+"/)) { p=substr($0,RSTART+5,RLENGTH-6) }
