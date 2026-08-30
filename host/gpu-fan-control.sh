@@ -29,8 +29,16 @@ FAN_SET_CMD=${FAN_SET_CMD:-}  # e.g. "ipmitool raw 0x3a 0x01 {FAN1} {DUTY} {DUTY
 
 log() { echo "$(date -Is) $*"; }
 
-max_gpu_temp() { # hottest GPU via DCGM (hang-safe); empty on failure
-  timeout 15 dcgmi dmon -e 150 -c 1 2>/dev/null | awk '$1=="GPU" && $3 ~ /^[0-9]+$/ {if ($3+0>m) m=$3+0} END {if (m) print m}'
+max_gpu_temp() { # hottest LIVE GPU via DCGM (hang-safe); empty on failure.
+  # Skips GPUs with a latched XID: a card that has fallen off the bus keeps
+  # reporting its cached temperature at death (e.g. 82C) and would otherwise
+  # pin the fans high forever while every working GPU sits idle.
+  timeout 15 dcgmi dmon -e 150,230 -c 1 2>/dev/null | awk '
+    $1=="GPU" && $3 ~ /^[0-9]+$/ {
+      if ($4 ~ /^[0-9]+$/ && $4+0 > 0) next
+      if ($3+0 > m) m = $3+0
+    }
+    END { if (m) print m }'
 }
 
 set_duty() { # set_duty <0-100>
