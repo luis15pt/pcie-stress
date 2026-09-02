@@ -38,6 +38,10 @@ live = {}
 live_lock = threading.Lock()
 
 
+# bumped by hand on every behavioural change; exported as vram_metrics_merge_info
+VERSION = "2026.09.02-2"
+
+
 def _self_sha():
     """sha256 of this file, so the running code is identifiable in Prometheus."""
     try:
@@ -86,13 +90,32 @@ def reader():
         try:
             proc = subprocess.Popen(
                 ["stdbuf", "-o0", GDDR6, "--per-module"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         except OSError as e:
             log("cannot start %s: %s" % (GDDR6, e))
             time.sleep(30)
             continue
-        for chunk in iter(lambda: proc.stdout.read(4096), ""):
-            for line in chunk.replace("\r", "\n").split("\n"):
+        # os.read returns as soon as ANY bytes are available; the buffered
+        # proc.stdout.read(4096) instead BLOCKS until it has 4096 chars, which
+        # silently re-introduced the very sampling lag `stdbuf -o0` removes (at
+        # ~550 B per refresh cycle that is seconds of delay, so temps recorded
+        # against a dropout timestamp were not the temps at that instant).
+        # `pending` carries the trailing partial line across reads: a chunk
+        # boundary landing mid-"VRAM Temps:" line used to parse as a short
+        # module group and corrupt the readings with no error.
+        fd = proc.stdout.fileno()
+        pending = ""
+        while True:
+            try:
+                buf = os.read(fd, 4096)
+            except OSError:
+                break
+            if not buf:
+                break
+            pending += buf.decode("utf-8", "replace")
+            parts = pending.replace("\r", "\n").split("\n")
+            pending = parts.pop()          # keep the incomplete tail
+            for line in parts:
                 if line.startswith("Device:"):
                     m = dev_re.search(line)
                     if m:

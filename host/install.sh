@@ -34,7 +34,11 @@ if [ "${1:-}" = "--journald-cap" ]; then
 fi
 
 systemctl daemon-reload
-systemctl enable --now gpu-dropout-recorder.service
+# same stale-code trap as vram-metrics: `enable --now` starts a stopped service
+# but is a NO-OP against a running one, so a freshly installed script would not
+# take effect until the next reboot. Restart explicitly.
+systemctl enable gpu-dropout-recorder.service >/dev/null 2>&1 || true
+systemctl restart gpu-dropout-recorder.service || echo "WARN: gpu-dropout-recorder.service failed to start"
 
 # vram-metrics: enable AND unconditionally restart. `install` replaces the file
 # on disk but a running Python interpreter keeps executing the old code from
