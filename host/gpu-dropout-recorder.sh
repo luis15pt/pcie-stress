@@ -30,6 +30,26 @@ PSU_INTERVAL=${PSU_INTERVAL:-60}
 IPMI_INTERVAL=${IPMI_INTERVAL:-30}
 COUNT_CHECK_EVERY=${COUNT_CHECK_EVERY:-6}   # GPU-count check every N detector ticks
 
+# ---- junction (hotspot) thermal watch -------------------------------------
+# Vendor guidance: a 5090 sustained over 100C junction is due for service. No
+# NVIDIA interface reports junction, so it comes from the vram-metrics pipeline
+# (/metrics.txt), which already applies the whole validity gate. We read that
+# file rather than scraping :9500 over HTTP or spawning our own gputemps: one
+# source of truth, no third BAR reader, and it keeps working when the scrape
+# path is broken - which is disproportionately likely while a card is cooking.
+METRICS_FILE=${METRICS_FILE:-/metrics.txt}
+JUNCTION_TOOL=${JUNCTION_TOOL:-/usr/local/bin/gputemps}
+JUNCTION_FILE_STALE=${JUNCTION_FILE_STALE:-60}  # then fall back to the tool directly
+JUNCTION_SAMPLE=${JUNCTION_SAMPLE:-2}      # matches the merger's write period
+JUNCTION_WARN=${JUNCTION_WARN:-95}
+JUNCTION_CRIT=${JUNCTION_CRIT:-100}
+JUNCTION_CLEAR_HYST=${JUNCTION_CLEAR_HYST:-3}
+# A 5090 moves ~10C/s at load onset, so a 1s spike is not an incident.
+JUNCTION_SUSTAIN=${JUNCTION_SUSTAIN:-6}    # ticks above threshold before firing
+JUNCTION_CLEAR_TICKS=${JUNCTION_CLEAR_TICKS:-12}
+JUNCTION_RENOTIFY=${JUNCTION_RENOTIFY:-3600}
+MAX_THERMAL_SNAPS=${MAX_THERMAL_SNAPS:-20}
+
 # dcgm fields: sm_clk mem_clk throttle mem_temp gpu_temp power pstate gpu_util
 # mem_util pcie_replay xid  (xid LAST -> $NF in detection)
 DCGM_FIELDS="100,101,112,140,150,155,190,203,204,202,230"
@@ -38,6 +58,7 @@ TEL="$DATA_DIR/telemetry.csv"
 BMC="$DATA_DIR/bmc.csv"
 VRAM="$DATA_DIR/vram.csv"
 PSU="$DATA_DIR/psu.csv"
+JUNCTION="$DATA_DIR/junction.csv"
 mkdir -p "$DATA_DIR"
 
 log() { echo "$(date -Is) $*"; }
@@ -102,20 +123,78 @@ stop_sampler() {
   pkill -f 'nvidia-smi --query-gpu=.*-lms' 2>/dev/null
 }
 
-vram_loop() { # GDDR VRAM hotspot via gddr6 tool (NVML/DCGM report 0 on GeForce)
-  [ -x "$VRAM_TOOL" ] || return
-  log "VRAM sampler enabled ($VRAM_TOOL)"
+metrics_loop() { # VRAM + junction, both from the merged exposition
+  # Replaces the old vram_loop, which ran its OWN gddr6 process and wrote every
+  # reading unfiltered - so Juno's dead GPU logged a constant 120C into
+  # vram.csv and corrupted post-incident thermal analysis. Reading /metrics.txt
+  # instead inherits the validity gate, removes one of three concurrent BAR
+  # readers and one duplicate parser, gains junction, and drops a locale hazard
+  # (the old parser depended on the UTF-8 degree sign with no LC_ALL set).
+  # It also keys every row by PCI address, so the vram-order.txt positional
+  # guesswork is gone.
+  log "metrics sampler enabled ($METRICS_FILE every ${JUNCTION_SAMPLE}s)"
   while true; do
-    stdbuf -o0 "$VRAM_TOOL" 2>/dev/null | stdbuf -i0 -o0 tr "\r" "\n" | while IFS= read -r line; do
-      case "$line" in
-        Device:*)      printf "# %s %s\n" "$(date +%s)" "$line" >> "$VRAM"
-                       printf "%s %s\n" "$(date +%s)" "$line" >> "$DATA_DIR/vram-order.txt" ;;
-        "VRAM Temps:"*) t=$(echo "$line" | grep -oE "[0-9]+°C" | tr -d "°C" | paste -sd" ")
-                        [ -n "$t" ] && printf "%s VRAMHOT %s\n" "${EPOCHREALTIME:-$(date +%s)}" "$t" >> "$VRAM" ;;
-      esac
+    junction_samples | while read -r bdf j ctool cnvml vmax vmean valid reason; do
+      [ -n "$bdf" ] || continue
+      printf "%s JUNCTION %s %s %s %s %s %s\n" \
+        "${EPOCHREALTIME:-$(date +%s)}" "$bdf" "$j" "$ctool" "$cnvml" "$valid" "$reason" >> "$JUNCTION"
+      [ "$vmax" = "NaN" ] || printf "%s VRAM %s %s %s\n" \
+        "${EPOCHREALTIME:-$(date +%s)}" "$bdf" "$vmax" "$vmean" >> "$VRAM"
     done
-    sleep 10   # tool exited; retry
+    sleep "$JUNCTION_SAMPLE"
   done
+}
+
+junction_samples() { # -> "bdf junction core_tool core_nvml vram_max vram_mean valid reason"
+  local age=999999 now
+  now=$(date +%s)
+  if [ -f "$METRICS_FILE" ]; then
+    age=$(( now - $(stat -c%Y "$METRICS_FILE" 2>/dev/null || echo 0) ))
+  fi
+  if [ -f "$METRICS_FILE" ] && [ "$age" -le "$JUNCTION_FILE_STALE" ]; then
+    awk '
+      function lbl(s, key,   m) {
+        if (match(s, key "=\"[^\"]*\"")) {
+          m = substr(s, RSTART, RLENGTH); sub(/^[^"]*"/, "", m); sub(/"$/, "", m)
+          return m
+        }
+        return ""
+      }
+      /^gpu_junction_temp_celsius\{/        { b=lbl($0,"pci_bus_id"); j[b]=$NF; seen[b]=1 }
+      /^gpu_junction_temp_valid\{/          { b=lbl($0,"pci_bus_id"); v[b]=$NF; seen[b]=1 }
+      /^gpu_core_temp_celsius\{.*source="gputemps"\}/ { b=lbl($0,"pci_bus_id"); ct[b]=$NF }
+      /^gpu_core_temp_celsius\{.*source="nvml"\}/     { b=lbl($0,"pci_bus_id"); cn[b]=$NF }
+      /^gddr6_vram_temp_max_celsius\{/      { b=lbl($0,"pci_bus_id"); vx[b]=$NF }
+      /^gddr6_vram_temp_mean_celsius\{/     { b=lbl($0,"pci_bus_id"); vm[b]=$NF }
+      /^gpu_junction_invalid_reason\{/      { b=lbl($0,"pci_bus_id"); r[b]=lbl($0,"reason") }
+      END {
+        for (b in seen) printf "%s %s %s %s %s %s %s %s\n", b,
+          (b in j ? j[b] : "NaN"), (b in ct ? ct[b] : "NaN"),
+          (b in cn ? cn[b] : "NaN"), (b in vx ? vx[b] : "NaN"),
+          (b in vm ? vm[b] : "NaN"), (b in v ? v[b] : 0),
+          (b in r ? r[b] : "-")
+      }' "$METRICS_FILE" 2>/dev/null
+    return 0
+  fi
+  # Degraded fallback: the pipeline is down, so ask the tool directly. This
+  # path can only label GPUs by NVML index - enough to raise an alarm, not
+  # enough for per-card attribution, so it is explicitly marked idx<N>.
+  [ -x "$JUNCTION_TOOL" ] || return 0
+  command -v python3 >/dev/null || return 0
+  timeout 30 "$JUNCTION_TOOL" --json --once 2>/dev/null | python3 -c '
+import json, sys
+for line in sys.stdin:
+    try:
+        o = json.loads(line)
+    except ValueError:
+        continue
+    for g in o.get("gpus", []):
+        j, c = g.get("junction"), g.get("core")
+        if j is None or c is None or j <= 0 or j < c - 1 or j > 125:
+            print("idx%s NaN %s NaN NaN NaN 0 fallback_rejected" % (g.get("index"), c))
+        else:
+            print("idx%s %s %s NaN NaN NaN 1 fallback" % (g.get("index"), j, c))
+' 2>/dev/null
 }
 
 psu_loop() { # per-PSU output/status from the local exporter (BMC often exposes only a subset)
@@ -150,7 +229,7 @@ ipmi_loop() {
 
 rotate_ring() {
   local f
-  for f in "$TEL" "$BMC" "$VRAM" "$PSU"; do
+  for f in "$TEL" "$BMC" "$VRAM" "$PSU" "$JUNCTION"; do
     [ -f "$f" ] || continue
     if [ "$(stat -c%s "$f" 2>/dev/null || echo 0)" -gt $((RING_MAX_MB * 1024 * 1024)) ]; then
       mv -f "$f" "$f.1"
@@ -171,18 +250,35 @@ kernel_dropout_count() { dmesg 2>/dev/null | grep -c 'fallen off the bus'; }
 kernel_xid_count()     { dmesg 2>/dev/null | grep -c 'NVRM: Xid'; }
 
 # ---------- capture ---------------------------------------------------------
+_post_webhook() { # _post_webhook <payload>
+  [ -n "$WEBHOOK_URL" ] || return 0
+  local i
+  for i in 1 2 3; do
+    curl -m 10 -fsS -X POST -H 'Content-Type: application/json' \
+      --data "$1" "$WEBHOOK_URL" >/dev/null 2>&1 && { log "webhook delivered"; return 0; }
+    sleep 5
+  done
+  log "webhook delivery FAILED after 3 attempts"
+}
+
 send_webhook() { # send_webhook <reason> <dead> <bundle>
+  # Payload deliberately unchanged: an existing consumer parses these fields.
+  # Thermal alerts get their own function rather than a "kind" branch in here,
+  # so no future edit can accidentally alter the dropout contract.
   [ -n "$WEBHOOK_URL" ] || return 0
   local payload
   payload=$(printf '{"text":"GPU DROPOUT on %s: %s (dead: %s) bundle: %s","host":"%s","time":"%s","reason":"%s","dead_gpus":"%s","bundle":"%s"}' \
     "$(hostname)" "$1" "$2" "$3" "$(hostname)" "$(date -Is)" "$1" "$2" "$3")
-  local i
-  for i in 1 2 3; do
-    curl -m 10 -fsS -X POST -H 'Content-Type: application/json' \
-      --data "$payload" "$WEBHOOK_URL" >/dev/null 2>&1 && { log "webhook delivered"; return 0; }
-    sleep 5
-  done
-  log "webhook delivery FAILED after 3 attempts"
+  _post_webhook "$payload"
+}
+
+send_thermal_webhook() { # <level> <bdf> <junction> <core> <peak> <snapshot>
+  [ -n "$WEBHOOK_URL" ] || return 0
+  local payload
+  payload=$(printf '{"text":"GPU JUNCTION %s on %s: %s at %sC (core %sC, episode peak %sC) - vendor threshold: sustained >=100C is a service case. snapshot: %s","host":"%s","time":"%s","kind":"thermal","level":"%s","pci_bus_id":"%s","junction_c":"%s","core_c":"%s","peak_c":"%s","snapshot":"%s"}' \
+    "$1" "$(hostname)" "$2" "$3" "$4" "$5" "$6" \
+    "$(hostname)" "$(date -Is)" "$1" "$2" "$3" "$4" "$5" "$6")
+  _post_webhook "$payload"
 }
 
 capture_incident() { # capture_incident <reason> <dead-ids>
@@ -195,7 +291,8 @@ capture_incident() { # capture_incident <reason> <dead-ids>
   cat "$TEL.1" "$TEL" 2>/dev/null | tail -n "$TAIL_LINES" > "$dir/telemetry-tail.csv"
   [ -f "$BMC" ] && cat "$BMC.1" "$BMC" 2>/dev/null | tail -n 20000 > "$dir/bmc-tail.csv"
   [ -f "$PSU" ] && cat "$PSU.1" "$PSU" 2>/dev/null | tail -n 20000 > "$dir/psu-tail.csv"
-  [ -f "$VRAM" ] && { tail -n 20 "$DATA_DIR/vram-order.txt" 2>/dev/null | sed "s/^/# order: /"; cat "$VRAM.1" "$VRAM" 2>/dev/null | tail -n 20000; } > "$dir/vram-tail.csv"
+  [ -f "$VRAM" ] && cat "$VRAM.1" "$VRAM" 2>/dev/null | tail -n 20000 > "$dir/vram-tail.csv"
+  [ -f "$JUNCTION" ] && cat "$JUNCTION.1" "$JUNCTION" 2>/dev/null | tail -n 20000 > "$dir/junction-tail.csv"
 
   # DCGM cached snapshot (dead GPUs keep last-known values, e.g. temp at death)
   [ "$MODE" = dcgm ] && timeout 20 dcgmi dmon -e "$DCGM_FIELDS" -c 1 > "$dir/dcgm-snapshot.txt" 2>&1
@@ -247,6 +344,127 @@ capture_incident() { # capture_incident <reason> <dead-ids>
   log "incident bundle complete: $dir"
 }
 
+
+latched_xid_bdfs() { # PCI addresses of GPUs with a latched XID (i.e. dead)
+  # A card that has fallen off the bus keeps reporting its temperature at the
+  # moment of death - stale, frozen and often high - so it would alert forever.
+  # This is the same class of bug that once held the chassis fans at 44% off a
+  # dead GPU's cached 82C. Needs the DCGM-entity -> BDF map, which is why
+  # refresh_gpu_map() had to be fixed first.
+  local ids id bdf
+  ids=$(dead_gpus_from_ring | cut -d: -f1)
+  [ -n "$ids" ] || return 0
+  for id in $ids; do
+    bdf=$(awk -F, -v i="$id" '$1==i {print $2}' "$DATA_DIR/gpu-map.txt" 2>/dev/null)
+    [ -n "$bdf" ] && printf "%s\n" "$bdf"
+  done
+}
+
+prune_thermal_snaps() {
+  local n
+  n=$(ls -1d "$DATA_DIR"/thermal-* 2>/dev/null | wc -l)
+  [ "$n" -gt "$MAX_THERMAL_SNAPS" ] || return 0
+  ls -1dt "$DATA_DIR"/thermal-* 2>/dev/null | tail -n +$((MAX_THERMAL_SNAPS + 1)) \
+    | xargs -r rm -rf
+}
+
+capture_thermal_snapshot() { # <level> <bdf> <junction>
+  # Deliberately NOT capture_incident(): that runs nvidia-bug-report.sh (up to
+  # 300s) and its caller disarms dropout detection. Disarming the dropout
+  # watchdog because a card got hot would be a serious regression, so this is a
+  # light, fast, separately-pruned capture.
+  local dir="$DATA_DIR/thermal-$(hostname)-$(date +%Y%m%d-%H%M%S)-${2//:/_}"
+  mkdir -p "$dir"
+  log "THERMAL $1 ($2 at $3C) - snapshot to $dir"
+  cat "$JUNCTION.1" "$JUNCTION" 2>/dev/null | tail -n 5000 > "$dir/junction-tail.csv"
+  cat "$TEL.1" "$TEL" 2>/dev/null | tail -n 20000 > "$dir/telemetry-tail.csv"
+  timeout 25 dcgmi dmon -e "$DCGM_FIELDS" -c 1 > "$dir/dcgm-now.txt" 2>&1
+  timeout 25 nvidia-smi -q -d TEMPERATURE,POWER,PERFORMANCE > "$dir/nvidia-smi-temps.txt" 2>&1
+  cp "$METRICS_FILE" "$dir/metrics.txt" 2>/dev/null
+  cp "$DATA_DIR/gpu-map.txt" "$dir/dcgm-gpu-map.txt" 2>/dev/null
+  printf '{"host":"%s","time":"%s","kind":"thermal","level":"%s","pci_bus_id":"%s","junction_c":"%s"}\n' \
+    "$(hostname)" "$(date -Is)" "$1" "$2" "$3" > "$dir/meta.json"
+  prune_thermal_snaps
+  printf "%s" "$dir"
+}
+
+# JSTATE = last level REPORTED (drives dedupe); JLVL = last level OBSERVED
+# (drives the sustain streak). They are distinct: a GPU can sit observed-warn
+# for hours while crit remains the last thing reported.
+declare -A JSTATE JSTREAK JCLEAR JLAST JPEAK JLVL
+junction_check() {
+  local now latched bdf j ctool cnvml vmax vmean valid reason
+  local lvl thr prev streak snap
+  now=$(date +%s)
+  latched=" $(latched_xid_bdfs | paste -sd' ' -) "
+  while read -r bdf j ctool cnvml vmax vmean valid reason; do
+    [ -n "${bdf:-}" ] || continue
+    case "$latched" in *" $bdf "*) continue ;; esac
+    [ "${valid:-0}" = "1" ] || continue
+    case "$j" in ''|*[!0-9]*) continue ;; esac
+
+    if   [ "$j" -ge "$JUNCTION_CRIT" ]; then lvl=crit; thr=$JUNCTION_CRIT
+    elif [ "$j" -ge "$JUNCTION_WARN" ]; then lvl=warn; thr=$JUNCTION_WARN
+    else lvl=ok; thr=0
+    fi
+    prev=${JSTATE[$bdf]:-ok}
+
+    # episode peak, for the report
+    if [ "$lvl" != ok ] && [ "$j" -gt "${JPEAK[$bdf]:-0}" ]; then JPEAK[$bdf]=$j; fi
+
+    if [ "$lvl" = ok ]; then
+      JSTREAK[$bdf]=0; JLVL[$bdf]=ok
+      if [ "$prev" != ok ]; then
+        # hysteresis: must fall clearly below the threshold that fired, for a
+        # sustained period, before the episode is declared over
+        local clear_at=$JUNCTION_WARN
+        [ "$prev" = crit ] && clear_at=$JUNCTION_CRIT
+        if [ "$j" -le $(( clear_at - JUNCTION_CLEAR_HYST )) ]; then
+          JCLEAR[$bdf]=$(( ${JCLEAR[$bdf]:-0} + 1 ))
+          if [ "${JCLEAR[$bdf]}" -ge "$JUNCTION_CLEAR_TICKS" ]; then
+            log "EVENT thermal-recovered $bdf junction=${j}C (episode peak ${JPEAK[$bdf]:-?}C, was $prev)"
+            JSTATE[$bdf]=ok; JCLEAR[$bdf]=0; JPEAK[$bdf]=0; JLAST[$bdf]=0
+          fi
+        else
+          JCLEAR[$bdf]=0
+        fi
+      fi
+      continue
+    fi
+
+    JCLEAR[$bdf]=0
+    # The streak is per-level, reset whenever the observed level changes.
+    # Carrying it across levels would let a single-tick excursion from a long
+    # warm spell (97C -> 103C for one sample) page immediately, which is the
+    # precise spike the sustain window exists to absorb.
+    if [ "${JLVL[$bdf]:-}" != "$lvl" ]; then
+      JSTREAK[$bdf]=0
+      JLVL[$bdf]=$lvl
+    fi
+    streak=$(( ${JSTREAK[$bdf]:-0} + 1 ))
+    JSTREAK[$bdf]=$streak
+
+    # escalation only, never on repeats: fire when the level rises above what
+    # was last reported and the reading has held for the sustain window
+    local escalated=0
+    if [ "$streak" -ge "$JUNCTION_SUSTAIN" ]; then
+      if [ "$prev" = ok ] && [ "$lvl" = warn ]; then escalated=1
+      elif [ "$prev" != crit ] && [ "$lvl" = crit ]; then escalated=1
+      elif [ "$lvl" = crit ] && [ "$prev" = crit ] \
+           && [ $(( now - ${JLAST[$bdf]:-0} )) -ge "$JUNCTION_RENOTIFY" ]; then
+        escalated=2   # still critical, hourly reminder at most
+      fi
+    fi
+    if [ "$escalated" != 0 ]; then
+      snap=$(capture_thermal_snapshot "$lvl" "$bdf" "$j")
+      send_thermal_webhook "$lvl" "$bdf" "$j" "$ctool" "${JPEAK[$bdf]:-$j}" "$snap"
+      JSTATE[$bdf]=$lvl
+      JLAST[$bdf]=$now
+      [ "$escalated" = 2 ] && log "thermal renotify $bdf still $lvl at ${j}C"
+    fi
+  done < <(junction_samples)
+}
+
 # ---------- main ------------------------------------------------------------
 FORCE_CAPTURE=0
 trap 'FORCE_CAPTURE=1' USR1
@@ -254,7 +472,7 @@ trap 'stop_sampler; exit 0' TERM INT
 
 start_sampler
 ipmi_loop &
-vram_loop &
+metrics_loop &
 psu_loop &
 refresh_gpu_map
 
@@ -336,6 +554,14 @@ while true; do
   if [ -n "$reason" ]; then
     capture_incident "$reason" "${dead:-unknown}"
     [ "$reason" = "manual-test" ] || ARMED=0
+  fi
+
+  # Junction thermal watch - deliberately LAST and skipped on any tick where a
+  # dropout fired, so one physical event cannot page twice. It never calls
+  # capture_incident() and never touches ARMED: dropout detection must stay
+  # live while a card is hot, which is exactly when it matters most.
+  if [ -z "$reason" ] && [ "$JUNCTION_CRIT" -gt 0 ]; then
+    junction_check
   fi
 
   # re-arm once the dead signature clears (post power-cycle recovery).

@@ -41,7 +41,7 @@ live_lock = threading.Lock()
 
 
 # bumped by hand on every behavioural change; exported as vram_metrics_merge_info
-VERSION = "2026.09.02-3"
+VERSION = "2026.09.02-4"
 
 
 def _self_sha():
