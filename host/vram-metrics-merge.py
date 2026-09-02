@@ -38,6 +38,16 @@ live = {}
 live_lock = threading.Lock()
 
 
+def _self_sha():
+    """sha256 of this file, so the running code is identifiable in Prometheus."""
+    try:
+        import hashlib
+        with open(__file__, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except OSError:
+        return "unknown"
+
+
 def log(*a):
     print(*a, file=sys.stderr, flush=True)
 
@@ -125,6 +135,39 @@ def value_for(bus):
     return max(mods), round(sum(mods) / len(mods)), True
 
 
+class Fam:
+    """Groups samples by metric family so HELP/TYPE is emitted exactly once,
+    immediately before that family's samples.
+
+    Prometheus' text parser tolerates interleaved families and duplicate HELP
+    lines; strict OpenMetrics does not, and this file is gaining a lot of
+    families. Routing every appended metric through here keeps the exposition
+    valid regardless of the order we happen to discover GPUs in.
+    """
+
+    def __init__(self):
+        self._meta = {}      # name -> (help, type)
+        self._samples = {}   # name -> [rendered sample lines]
+
+    def add(self, name, help_text, mtype, labels, value):
+        if name not in self._meta:
+            self._meta[name] = (help_text, mtype)
+            self._samples[name] = []
+        if labels:
+            lbl = ",".join('%s="%s"' % (k, v) for k, v in labels.items())
+            self._samples[name].append("%s{%s} %s" % (name, lbl, value))
+        else:
+            self._samples[name].append("%s %s" % (name, value))
+
+    def render(self):
+        out = []
+        for name, (help_text, mtype) in self._meta.items():
+            out.append("# HELP %s %s" % (name, help_text))
+            out.append("# TYPE %s %s" % (name, mtype))
+            out.extend(self._samples[name])
+        return out
+
+
 def merge_once(umap):
     try:
         with open(RAW) as f:
@@ -132,7 +175,8 @@ def merge_once(umap):
     except OSError:
         return False
     by_uuid = {v: k for k, v in umap.items()}
-    out, extra = [], []
+    out = []
+    fam = Fam()
     val_re = re.compile(r'^(DCGM_FI_DEV_(?:VRAM|HOT_SPOT)_TEMP\{[^}]*UUID="([^"]+)"[^}]*\})\s+(\S+)')
     seen = set()
     for line in raw.splitlines():
@@ -149,26 +193,37 @@ def merge_once(umap):
             out.append("%s %s" % (head, repl))
             if bus and uuid not in seen:
                 seen.add(uuid)
-                extra.append('gddr6_vram_valid{gpu_uuid="%s",pci_bus_id="%s"} %d'
-                             % (uuid, bus, 1 if ok else 0))
+                base = {"gpu_uuid": uuid, "pci_bus_id": bus}
+                fam.add("gddr6_vram_valid",
+                        "Whether the BAR-level GDDR reading is usable (0 = dead GPU or stale)",
+                        "gauge", base, 1 if ok else 0)
                 with live_lock:
                     e = live.get(bus)
                 if ok and e:
+                    # explicit names for the two aggregates - DCGM_FI_DEV_HOT_SPOT_TEMP
+                    # is a GDDR maximum today and that is not what "hot spot" means
+                    fam.add("gddr6_vram_temp_max_celsius",
+                            "Hottest GDDR module on this GPU, from BAR registers",
+                            "gauge", base, hot)
+                    fam.add("gddr6_vram_temp_mean_celsius",
+                            "Mean GDDR module temperature on this GPU, from BAR registers",
+                            "gauge", base, mean)
                     for i, v in enumerate(e["modules"]):
-                        extra.append('gddr6_vram_module_temp_celsius'
-                                     '{gpu_uuid="%s",pci_bus_id="%s",module="%d"} %d'
-                                     % (uuid, bus, i, v))
+                        lbl = dict(base, module=str(i))
+                        fam.add("gddr6_vram_module_temp_celsius",
+                                "Per-module GDDR temperature from BAR registers",
+                                "gauge", lbl, v)
         else:
             out.append(line)
-    if extra:
-        out.append("# HELP gddr6_vram_valid Whether the BAR-level GDDR reading is usable (0 = dead GPU or stale)")
-        out.append("# TYPE gddr6_vram_valid gauge")
-        out.append("# HELP gddr6_vram_module_temp_celsius Per-module GDDR temperature from BAR registers")
-        out.append("# TYPE gddr6_vram_module_temp_celsius gauge")
-        out.extend(extra)
-    out.append("# HELP gddr6_vram_merge_timestamp_seconds Unix time of the last successful merge (staleness check)")
-    out.append("# TYPE gddr6_vram_merge_timestamp_seconds gauge")
-    out.append("gddr6_vram_merge_timestamp_seconds %d" % time.time())
+    fam.add("gddr6_vram_merge_timestamp_seconds",
+            "Unix time of the last successful merge (staleness check)",
+            "gauge", None, int(time.time()))
+    # makes the RUNNING code observable: install replaces the file but a live
+    # interpreter keeps the old bytecode, which is how one host silently ran a
+    # stale merger for weeks. Compare this across hosts to detect drift.
+    fam.add("vram_metrics_merge_info", "Version and checksum of the running merger",
+            "gauge", {"version": VERSION, "file_sha256": _self_sha()}, 1)
+    out.extend(fam.render())
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:
         f.write("\n".join(out) + "\n")

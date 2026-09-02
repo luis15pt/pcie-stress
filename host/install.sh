@@ -35,8 +35,36 @@ fi
 
 systemctl daemon-reload
 systemctl enable --now gpu-dropout-recorder.service
-sleep 2
-systemctl --no-pager status gpu-dropout-recorder.service | head -8
+
+# vram-metrics: enable AND unconditionally restart. `install` replaces the file
+# on disk but a running Python interpreter keeps executing the old code from
+# memory - that is exactly how one host ran a stale merge.py for weeks. A brief
+# metrics gap is the right trade for knowing what is actually running.
+systemctl enable vram-metrics.service >/dev/null 2>&1 || true
+systemctl restart vram-metrics.service || echo "WARN: vram-metrics.service failed to start"
+
+# gpu-fan-control: only enable once FAN_SET_CMD is known, otherwise it logs
+# "FAN_SET_CMD not configured" every 5s forever.
+if grep -q '^[[:space:]]*FAN_SET_CMD=' /etc/gpu-fan-control.conf 2>/dev/null; then
+  systemctl enable gpu-fan-control.service >/dev/null 2>&1 || true
+  systemctl restart gpu-fan-control.service || echo "WARN: gpu-fan-control.service failed to start"
+else
+  echo "gpu-fan-control NOT enabled: FAN_SET_CMD unset in /etc/gpu-fan-control.conf"
+  echo "  discover it with: sudo /usr/local/bin/gpu-fan-control.sh probe"
+fi
+
+sleep 3
+echo ""
+echo "=== service state ==="
+for u in gpu-dropout-recorder vram-metrics gpu-fan-control; do
+  printf "  %-22s %s\n" "$u" "$(systemctl is-active $u 2>/dev/null) / $(systemctl is-enabled $u 2>/dev/null)"
+done
+# drift check: warn if an installed unit differs from the repo copy
+for u in gpu-dropout-recorder gpu-fan-control vram-metrics; do
+  if [ -f "$u.service" ] && ! cmp -s "$u.service" "/etc/systemd/system/$u.service"; then
+    echo "  WARN: /etc/systemd/system/$u.service differs from the repo copy"
+  fi
+done
 echo ""
 echo "telemetry ring: /var/log/gpu-recorder/telemetry.csv"
 echo "test capture:   sudo kill -USR1 \$(systemctl show -p MainPID --value gpu-dropout-recorder)"

@@ -56,10 +56,22 @@ gpu_count() { # cheap, hang-safe GPU count (nvidia-smi -L drops dead GPUs; dcgm 
   timeout 20 nvidia-smi -L 2>/dev/null | grep -c '^GPU' || echo 0
 }
 
-refresh_gpu_map() { # id -> BDF map from dcgm discovery (works with dead GPUs)
+refresh_gpu_map() { # dcgm entity id -> BDF -> UUID (works with dead GPUs)
+  # dcgmi prints a box-drawn table, so the BDF is NOT the last field - $NF is the
+  # closing "|". Extracting positionally produced "0,|" for every GPU, which broke
+  # every bundle's gpu map. Match the values by regex instead.
   timeout 20 dcgmi discovery -l 2>/dev/null | awk '
-    /^\| [0-9]+ / { id=$2 }
-    /PCI Bus ID/  { gsub("00000000:","0000:",$NF); print id","tolower($NF) }' > "$DATA_DIR/gpu-map.txt" 2>/dev/null
+    /^\| *[0-9]+ +\|/ { id=$2 }
+    /PCI Bus ID:/ {
+      if (match($0, /[0-9A-Fa-f]{8}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}\.[0-9]/)) {
+        bdf = substr($0, RSTART, RLENGTH); sub(/^00000000:/, "0000:", bdf); bdf = tolower(bdf)
+      }
+    }
+    /Device UUID:/ {
+      if (match($0, /GPU-[0-9a-fA-F-]+/) && bdf != "") {
+        print id "," bdf "," substr($0, RSTART, RLENGTH)
+      }
+    }' > "$DATA_DIR/gpu-map.txt" 2>/dev/null
 }
 
 # ---------- samplers --------------------------------------------------------

@@ -16,6 +16,9 @@ ExecStartPre=/bin/mkdir -p /run/gddr6-vram
 ExecStart=/usr/local/bin/vram-metrics-supervisor.sh
 Restart=always
 RestartSec=10
+# without this, repeated early failures hit the default start limit and systemd
+# stops retrying for good - the opposite of what a monitoring service should do
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target
