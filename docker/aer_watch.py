@@ -8,6 +8,8 @@ disappearing from nvidia-smi). Both end with per-run summary tables:
 AER deltas and a GPU health verdict (thermal / errors / dropout).
 Usage: aer_watch.py [interval_seconds]
 """
+import os
+import re
 import signal
 import subprocess
 import sys
@@ -79,6 +81,58 @@ def throttle_flags(mask: int) -> set[str]:
 
 def fmt_flags(flags: set[str]) -> str:
     return ",".join(sorted(flags)) if flags else "-"
+
+
+HOST_METRICS_URL = os.environ.get("HOST_METRICS_URL", "")
+_host_warned = False
+
+
+def host_metrics() -> dict[str, dict]:
+    """{bdf: {junction, gddr_max, core_ref}} from a host vram-metrics exporter.
+
+    Opt-in via HOST_METRICS_URL, and silently inert when unset so the image
+    still works unchanged on RunPod and anywhere else without a host exporter.
+
+    This exists because the container CANNOT see these values itself:
+    temperature.memory is N/A on GDDR7 (the field is HBM-only) and no NVIDIA
+    interface exposes junction at all, so the old `max_vram >= 90` verdict
+    below could never once have fired. Junction is the vendor's stated best
+    indicator of a thermally-failing 5090, so it is worth reaching for the
+    host's exporter when one is available.
+    """
+    global _host_warned
+    if not HOST_METRICS_URL:
+        return {}
+    try:
+        import urllib.request
+        with urllib.request.urlopen(HOST_METRICS_URL, timeout=5) as r:
+            body = r.read().decode("utf-8", "replace")
+    except Exception as e:                       # noqa: BLE001 - never fatal
+        if not _host_warned:
+            _host_warned = True
+            print(f"host metrics unavailable ({HOST_METRICS_URL}): {e}; "
+                  f"junction/GDDR columns will show n/a", flush=True)
+        return {}
+    out: dict[str, dict] = {}
+    pat = re.compile(r'^(\w+)\{([^}]*)\}\s+([-\d.eE+]+)')
+    want = {"gpu_junction_temp_celsius": "junction",
+            "gddr6_vram_temp_max_celsius": "gddr_max",
+            "gpu_junction_core_delta_celsius": "delta"}
+    for line in body.splitlines():
+        m = pat.match(line)
+        if not m or m.group(1) not in want:
+            continue
+        lm = re.search(r'pci_bus_id="([^"]+)"', m.group(2))
+        if not lm:
+            continue
+        bdf = lm.group(1).lower()
+        if bdf.startswith("00000000:"):
+            bdf = "0000:" + bdf[9:]
+        try:
+            out.setdefault(bdf, {})[want[m.group(1)]] = float(m.group(3))
+        except ValueError:
+            pass
+    return out
 
 
 def smi() -> dict[str, dict]:
@@ -180,13 +234,21 @@ class Tracker:
             if bdf not in tel and bdf not in self.gone:
                 self.gone.add(bdf)
                 events.append(f"{ts} EVENT gpu={bdf} DISAPPEARED from nvidia-smi (fallen off the bus?)")
+        host = host_metrics()
         for bdf, t in tel.items():
             if bdf in self.gone:
                 self.gone.discard(bdf)
                 events.append(f"{ts} EVENT gpu={bdf} reappeared in nvidia-smi")
             s = self.stats.setdefault(bdf, dict(
                 max_temp=0.0, max_vram=None, max_fan=None, min_clk=None, max_clk=0.0,
-                hw_s=0.0, swt_s=0.0, run_s=0.0))
+                hw_s=0.0, swt_s=0.0, run_s=0.0, max_junction=None, max_gddr=None))
+            hm = host.get(bdf, {})
+            if hm.get("junction") is not None:
+                s["max_junction"] = (hm["junction"] if s["max_junction"] is None
+                                     else max(s["max_junction"], hm["junction"]))
+            if hm.get("gddr_max") is not None:
+                s["max_gddr"] = (hm["gddr_max"] if s["max_gddr"] is None
+                                 else max(s["max_gddr"], hm["gddr_max"]))
             s["max_temp"] = max(s["max_temp"], t["temp"])
             if t["vram"] is not None:
                 s["max_vram"] = t["vram"] if s["max_vram"] is None else max(s["max_vram"], t["vram"])
@@ -381,8 +443,9 @@ def summary(base: dict, trk: Tracker) -> None:
     if not trk.stats:
         return
     hp = Table(title="GPU health — this run", expand=False)
-    for col in ("GPU", "max temp", "max vram", "max fan", "sm clk min/max",
-                "HW throttle", "sw-thermal", "AER Δ", "verdict"):
+    for col in ("GPU", "max temp", "max junc", "max gddr", "max fan",
+                "sm clk min/max", "HW throttle", "sw-thermal", "AER Δ",
+                "verdict"):
         hp.add_column(col)
     issues = []
     for dev, port in gpus():
@@ -401,8 +464,19 @@ def summary(base: dict, trk: Tracker) -> None:
             verdicts.append((f"PCIe errors +{d}", "bold red"))
         if s["max_temp"] >= 88:
             verdicts.append((f"hot ({s['max_temp']:.0f}°C)", "yellow"))
-        if s["max_vram"] is not None and s["max_vram"] >= 90:
-            verdicts.append((f"vram hot ({s['max_vram']:.0f}°C)", "yellow"))
+        # GDDR from the host's BAR-level reader. Threshold raised to 95: >=90 is
+        # entirely normal for GDDR7 under load, so 90 would cry wolf every run.
+        gddr = s["max_gddr"] if s["max_gddr"] is not None else s["max_vram"]
+        if gddr is not None and gddr >= 95:
+            verdicts.append((f"gddr hot ({gddr:.0f}°C)", "yellow"))
+        # Junction is the signal the vendor actually asks about. Sustained
+        # >=100C under a defined load means the card is due for service; this
+        # is a peak over the run, so it is phrased as a check, not a verdict.
+        j = s["max_junction"]
+        if j is not None and j >= 100:
+            verdicts.append((f"JUNCTION {j:.0f}°C - CHECK", "bold red"))
+        elif j is not None and j >= 95:
+            verdicts.append((f"junction warm ({j:.0f}°C)", "yellow"))
         if not verdicts:
             verdicts = [("OK", "green")]
         else:
@@ -411,12 +485,20 @@ def summary(base: dict, trk: Tracker) -> None:
         for i, (v, st) in enumerate(verdicts):
             vt.append(("  " if i else "") + v, style=st)
         mn = s["min_clk"] if s["min_clk"] is not None else 0
+        # "n/a" here means the host exporter was not reachable, not that the
+        # card is cool: set HOST_METRICS_URL to populate these two columns.
         hp.add_row(dev.name, temp_cell(s["max_temp"]),
-                   f"{s['max_vram']:.0f}°C" if s["max_vram"] is not None else "n/a",
+                   f"{j:.0f}°C" if j is not None else "n/a",
+                   f"{gddr:.0f}°C" if gddr is not None else "n/a",
                    f"{s['max_fan']:.0f}%" if s["max_fan"] is not None else "n/a",
                    f"{mn:.0f}/{s['max_clk']:.0f} MHz",
                    f"{s['hw_s']:.0f}s", f"{s['swt_s']:.0f}s", f"+{d}", vt)
     console.print(hp)
+    if not HOST_METRICS_URL:
+        console.print("[dim]junction/gddr columns need a host exporter: "
+                      "-e HOST_METRICS_URL=http://<host>:9500/metrics "
+                      "(no NVIDIA interface exposes junction, and "
+                      "temperature.memory is N/A on GDDR7)[/]")
     if issues:
         console.print("[bold red]Issues:[/] " + "; ".join(issues))
     else:

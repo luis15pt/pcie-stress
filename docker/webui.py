@@ -58,6 +58,9 @@ class Sampler(threading.Thread):
     def tick(self):
         self.trk.tick(self.interval)
         tel = self.trk.tel
+        # Fetched once per tick, not per GPU. Returns {} instantly when
+        # HOST_METRICS_URL is unset, so the dashboard is unchanged without it.
+        hostm = aw.host_metrics()
         g = {}
         for dev, port in aw.gpus():
             t = tel.get(dev.name)
@@ -69,7 +72,15 @@ class Sampler(threading.Thread):
                                t["mem_used"], t["mem_total"],
                                self.trk.gpu_run_delta(dev, port),
                                aw.link_str(dev), flags,
-                               t["vram"] if t["vram"] is not None else -1]
+                               t["vram"] if t["vram"] is not None else -1,
+                               # junction and BAR-level GDDR from the host
+                               # exporter; -1 = not available. The container
+                               # cannot read either itself: no NVIDIA interface
+                               # exposes junction and temperature.memory is
+                               # N/A on GDDR7, which is why the old vtemp
+                               # field was always -1.
+                               hostm.get(dev.name, {}).get("junction", -1),
+                               hostm.get(dev.name, {}).get("gddr_max", -1)]
             else:
                 g[dev.name] = None  # dropped off the bus
         for bdf in self.trk.gone:
@@ -180,12 +191,14 @@ function render(bdf,v,ts){
     return;
   }
   el.classList.remove('dead');
-  const [util,mu,temp,fan,pw,pl,clk,clkm,vu,vt,aer,link,thr,vtemp]=v;
+  const [util,mu,temp,fan,pw,pl,clk,clkm,vu,vt,aer,link,thr,vtemp,junc,gddr]=v;
   badges.innerHTML=`<span class="badge link">${link}</span>`+
     thr.map(t=>`<span class="badge thr">${t}</span>`).join('');
   stats.innerHTML=
     stat('util',util.toFixed(0)+'%')+
     stat('temp',temp.toFixed(0)+'°C',temp>=86?'hot':temp>=75?'warm':'')+
+    (junc>=0?stat('junction',junc.toFixed(0)+'°C',junc>=100?'hot':junc>=95?'warm':''):'')+
+    (gddr>=0?stat('gddr',gddr.toFixed(0)+'°C',gddr>=100?'hot':gddr>=95?'warm':''):'')+
     stat('power',pw.toFixed(0)+'W / '+pl.toFixed(0))+
     stat('sm clk',clk.toFixed(0)+'M')+
     stat('vram',(vu/1024).toFixed(1)+'/'+(vt/1024).toFixed(0)+'G')+

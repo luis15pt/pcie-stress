@@ -95,6 +95,11 @@ docker run --rm -d --gpus all -p 8080:8080 \
   ghcr.io/luis15pt/pcie-stress:latest web        # monitoring UI only, no load
 ```
 
+Set `-e HOST_METRICS_URL=http://<host>:9500/metrics` to add junction and
+BAR-level GDDR columns: a container cannot read either itself (no NVIDIA
+interface exposes junction, and `temperature.memory` is `N/A` on GDDR7), so
+without it those columns read `n/a` — which means "not measured", not "cool".
+
 Dark live dashboard at http://<host>:8080/ — per-GPU cards (util, temp, power,
 clocks, VRAM, fan, link, throttle badges, per-run AER delta) with 30-min history
 graphs, non-GPU AER table, event feed, and a page-wide red alert the moment any
@@ -137,6 +142,70 @@ What it does:
 - **Webhook** (Slack-compatible JSON) on every incident; silent if unset.
 - Test end-to-end: `sudo kill -USR1 $(systemctl show -p MainPID --value gpu-dropout-recorder)`
   forces a capture with reason `manual-test`.
+
+### Junction (hotspot) temperature — always-on
+
+Vendor guidance: **junction temperature is the best early indicator of a
+thermally-failing RTX 5090, and a card sustained above 100 °C junction is due
+for service.** No NVIDIA interface reports it — NVML enumerates exactly one
+thermal sensor, DCGM has no junction field, and `temperature.memory` is `N/A`
+on GDDR7. It is read from BAR0 MMIO instead, via a pinned build of
+[ThomasBaruzier/gddr6-core-junction-vram-temps](https://github.com/ThomasBaruzier/gddr6-core-junction-vram-temps).
+
+```bash
+sudo host/build-gputemps.sh          # pinned commit, checksum-verified, no CUDA toolkit
+sudo host/install.sh                 # readers start in JUNCTION_MODE=observe
+sudo gpu-junction-check.sh           # per-GPU table, exit 2 if any card >= 100C
+sudo gpu-junction-check.sh --watch
+```
+
+Because the number comes from a third-party register offset, **every reading
+passes a validity gate before it becomes a metric**: staleness, a cross-check
+against NVML core temperature, impossible values, junction-below-core (wrong
+profile), and a frozen-register check. Anything rejected is *omitted* rather
+than published — a plausible-but-wrong value would defeat the alert this
+exists to raise, whereas a gap is alertable with `absent()`. The gate is a pure
+function with an offline table test (`host/test_junction_gate.py`, no GPU
+needed).
+
+Key metrics on `:9500` — `gpu_junction_temp_celsius` (canonical),
+`gpu_junction_core_delta_celsius` (**a rising trend at constant power is
+thermal-interface degradation**), `gddr6_vram_temp_max_celsius`,
+`gpu_core_temp_celsius{source="nvml"|"gputemps"}` (makes the cross-check
+auditable), `gpu_thermal_margin_celsius` (official T.Limit — **lower is
+hotter**), plus `gpu_junction_temp_valid`, `gpu_junction_invalid_reason`,
+`gpu_junction_map_trusted`, `gpu_junction_reader_up`,
+`gpu_junction_parse_errors_total` and `gpu_junction_tool_info`.
+
+`JUNCTION_MODE=observe` (default) publishes the new series and leaves
+`DCGM_FI_DEV_HOT_SPOT_TEMP` carrying the GDDR maximum it has always carried.
+`authoritative` makes that name mean real junction — **announce it to whoever
+owns the central Prometheus before flipping**, since it changes an existing
+series' meaning.
+
+The recorder alerts on sustained breaches (95 °C warn / 100 °C service,
+per-GPU, escalation-only with an hourly re-notify ceiling) and takes a light
+thermal snapshot. It deliberately does **not** capture a full incident bundle
+and never disarms dropout detection — a hot card is exactly when you still
+want the dropout watchdog live.
+
+### Screening for a service claim
+
+```bash
+sudo gpu-heat-screen.sh --dry-run                    # show the plan, change nothing
+sudo gpu-heat-screen.sh --confirm                    # 30 min pytorch soak + verdict
+sudo gpu-heat-screen.sh --confirm --method gpuburn --duration 3600
+```
+
+**A junction number only supports a service claim if you can state the load it
+was measured under.** Junction runs 10–20 °C above core and a 5090 under heavy
+load legitimately sits at 100–110 °C, so "over 100 °C" is meaningless without a
+defined load and inlet temperature. This script is that definition: it stops
+tenant-facing services (and restarts them on every exit path, including Ctrl-C),
+suppresses thermal alerting for the run via an **auto-expiring** window,
+records per-GPU maxima with throttle reasons, and prints a verdict table
+exiting non-zero if any card reached the threshold. Quote the results directory
+in the claim — it documents the load, not just the temperature.
 
 Honest limits: power.draw is a ~1s-averaged counter — ms-scale rail transients
 are only visible to the BMC/PSU (enable the optional IPMI sampler) or a scope.
