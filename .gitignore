@@ -1,3 +1,5 @@
 pcie-state-*.txt
 *.tgz
 logs_temp/
+__pycache__/
+*.pyc
