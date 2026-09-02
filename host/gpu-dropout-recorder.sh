@@ -49,6 +49,13 @@ JUNCTION_SUSTAIN=${JUNCTION_SUSTAIN:-6}    # ticks above threshold before firing
 JUNCTION_CLEAR_TICKS=${JUNCTION_CLEAR_TICKS:-12}
 JUNCTION_RENOTIFY=${JUNCTION_RENOTIFY:-3600}
 MAX_THERMAL_SNAPS=${MAX_THERMAL_SNAPS:-20}
+# Maintenance window for deliberate heat soaks. A screening run legitimately
+# drives junction to 100-110C, which must not page anyone - but a suppression
+# that can be forgotten would silently disable thermal monitoring forever, so
+# the file carries an expiry epoch and is ignored (with a warning) once past
+# it, and never honoured beyond JUNCTION_SUPPRESS_MAX regardless of content.
+JUNCTION_SUPPRESS_FILE=${JUNCTION_SUPPRESS_FILE:-/run/gpu-junction-suppress}
+JUNCTION_SUPPRESS_MAX=${JUNCTION_SUPPRESS_MAX:-43200}   # 12h hard ceiling
 
 # dcgm fields: sm_clk mem_clk throttle mem_temp gpu_temp power pstate gpu_util
 # mem_util pcie_replay xid  (xid LAST -> $NF in detection)
@@ -395,6 +402,25 @@ capture_thermal_snapshot() { # <level> <bdf> <junction>; result in $THERMAL_SNAP
 # JSTATE = last level REPORTED (drives dedupe); JLVL = last level OBSERVED
 # (drives the sustain streak). They are distinct: a GPU can sit observed-warn
 # for hours while crit remains the last thing reported.
+junction_suppressed() { # 0 = suppressed (skip alerting)
+  [ -f "$JUNCTION_SUPPRESS_FILE" ] || return 1
+  local until now started
+  until=$(awk 'NR==1{print $1+0}' "$JUNCTION_SUPPRESS_FILE" 2>/dev/null)
+  now=$(date +%s)
+  started=$(stat -c%Y "$JUNCTION_SUPPRESS_FILE" 2>/dev/null || echo "$now")
+  if [ "${until:-0}" -le "$now" ]; then
+    log "junction suppression file expired - REMOVING and resuming alerting"
+    rm -f "$JUNCTION_SUPPRESS_FILE"
+    return 1
+  fi
+  if [ $(( now - started )) -gt "$JUNCTION_SUPPRESS_MAX" ]; then
+    log "junction suppression exceeded ${JUNCTION_SUPPRESS_MAX}s ceiling - REMOVING"
+    rm -f "$JUNCTION_SUPPRESS_FILE"
+    return 1
+  fi
+  return 0
+}
+
 declare -A JSTATE JSTREAK JCLEAR JLAST JPEAK JLVL
 junction_check() {
   local now latched bdf j ctool cnvml vmax vmean valid reason
@@ -565,7 +591,12 @@ while true; do
   # capture_incident() and never touches ARMED: dropout detection must stay
   # live while a card is hot, which is exactly when it matters most.
   if [ -z "$reason" ] && [ "$JUNCTION_CRIT" -gt 0 ]; then
-    junction_check
+    if junction_suppressed; then
+      # still sampled into junction.csv by metrics_loop; only alerting pauses
+      [ $((TICK % 60)) = 0 ] && log "junction alerting suppressed (maintenance window)"
+    else
+      junction_check
+    fi
   fi
 
   # re-arm once the dead signature clears (post power-cycle recovery).
