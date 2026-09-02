@@ -28,7 +28,7 @@ DEAD_IDS=""
 
 log() { :; }
 dead_gpus_from_ring() { [ -z "$DEAD_IDS" ] || printf "%s\n" "$DEAD_IDS"; }
-capture_thermal_snapshot() { printf "%s" "$DATA_DIR/thermal-fake"; }
+capture_thermal_snapshot() { THERMAL_SNAP="$DATA_DIR/thermal-fake"; }
 send_thermal_webhook() { WEBHOOKS="$WEBHOOKS $1:$2:$3"; }
 capture_incident() { FAILS=$((FAILS+1)); echo "  FAIL: junction path called capture_incident!"; }
 

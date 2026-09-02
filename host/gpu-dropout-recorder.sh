@@ -368,7 +368,11 @@ prune_thermal_snaps() {
     | xargs -r rm -rf
 }
 
-capture_thermal_snapshot() { # <level> <bdf> <junction>
+THERMAL_SNAP=""
+capture_thermal_snapshot() { # <level> <bdf> <junction>; result in $THERMAL_SNAP
+  # Returns via a global rather than stdout on purpose: log() writes to stdout,
+  # so capturing this function with $(...) swallowed its own log line into the
+  # webhook payload AND kept it out of the journal.
   # Deliberately NOT capture_incident(): that runs nvidia-bug-report.sh (up to
   # 300s) and its caller disarms dropout detection. Disarming the dropout
   # watchdog because a card got hot would be a serious regression, so this is a
@@ -385,7 +389,7 @@ capture_thermal_snapshot() { # <level> <bdf> <junction>
   printf '{"host":"%s","time":"%s","kind":"thermal","level":"%s","pci_bus_id":"%s","junction_c":"%s"}\n' \
     "$(hostname)" "$(date -Is)" "$1" "$2" "$3" > "$dir/meta.json"
   prune_thermal_snaps
-  printf "%s" "$dir"
+  THERMAL_SNAP="$dir"
 }
 
 # JSTATE = last level REPORTED (drives dedupe); JLVL = last level OBSERVED
@@ -394,7 +398,7 @@ capture_thermal_snapshot() { # <level> <bdf> <junction>
 declare -A JSTATE JSTREAK JCLEAR JLAST JPEAK JLVL
 junction_check() {
   local now latched bdf j ctool cnvml vmax vmean valid reason
-  local lvl thr prev streak snap
+  local lvl thr prev streak
   now=$(date +%s)
   latched=" $(latched_xid_bdfs | paste -sd' ' -) "
   while read -r bdf j ctool cnvml vmax vmean valid reason; do
@@ -456,8 +460,8 @@ junction_check() {
       fi
     fi
     if [ "$escalated" != 0 ]; then
-      snap=$(capture_thermal_snapshot "$lvl" "$bdf" "$j")
-      send_thermal_webhook "$lvl" "$bdf" "$j" "$ctool" "${JPEAK[$bdf]:-$j}" "$snap"
+      capture_thermal_snapshot "$lvl" "$bdf" "$j"
+      send_thermal_webhook "$lvl" "$bdf" "$j" "$ctool" "${JPEAK[$bdf]:-$j}" "$THERMAL_SNAP"
       JSTATE[$bdf]=$lvl
       JLAST[$bdf]=$now
       [ "$escalated" = 2 ] && log "thermal renotify $bdf still $lvl at ${j}C"
