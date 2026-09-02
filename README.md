@@ -96,9 +96,15 @@ docker run --rm -d --gpus all -p 8080:8080 \
 ```
 
 Set `-e HOST_METRICS_URL=http://<host>:9500/metrics` to add junction and
-BAR-level GDDR columns: a container cannot read either itself (no NVIDIA
-interface exposes junction, and `temperature.memory` is `N/A` on GDDR7), so
-without it those columns read `n/a` — which means "not measured", not "cool".
+BAR-level GDDR columns. To be precise about why they are not read in-container:
+GDDR and junction temperatures **are** readable, but only from BAR0 MMIO — the
+NVIDIA interfaces available to a container report neither
+(`temperature.memory` is `N/A` because that field is HBM-only, DCGM field 140
+returns a literal `0`, and NVML exposes no junction sensor at all). Reading
+BAR0 needs `--privileged` plus the reader binaries in the image, and it would
+be a second, ungated source of truth competing with the host's. Pointing at
+the host exporter reuses the readings that already passed the validity gate.
+Without it those columns read `n/a` — which means "not measured", not "cool".
 
 Dark live dashboard at http://<host>:8080/ — per-GPU cards (util, temp, power,
 clocks, VRAM, fan, link, throttle badges, per-run AER delta) with 30-min history
@@ -147,9 +153,12 @@ What it does:
 
 Vendor guidance: **junction temperature is the best early indicator of a
 thermally-failing RTX 5090, and a card sustained above 100 °C junction is due
-for service.** No NVIDIA interface reports it — NVML enumerates exactly one
-thermal sensor, DCGM has no junction field, and `temperature.memory` is `N/A`
-on GDDR7. It is read from BAR0 MMIO instead, via a pinned build of
+for service.** No NVIDIA interface reports it — NVML enumerates exactly
+one thermal sensor and DCGM has no junction field. (The same applies to VRAM:
+GDDR temperatures are perfectly readable, just not through NVIDIA's own
+interfaces, where `temperature.memory` is `N/A` because the field is HBM-only
+and DCGM field 140 returns a literal `0`.) Both come from BAR0 MMIO instead —
+junction via a pinned build of
 [ThomasBaruzier/gddr6-core-junction-vram-temps](https://github.com/ThomasBaruzier/gddr6-core-junction-vram-temps).
 
 ```bash

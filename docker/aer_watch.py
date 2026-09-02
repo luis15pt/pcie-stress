@@ -93,12 +93,13 @@ def host_metrics() -> dict[str, dict]:
     Opt-in via HOST_METRICS_URL, and silently inert when unset so the image
     still works unchanged on RunPod and anywhere else without a host exporter.
 
-    This exists because the container CANNOT see these values itself:
-    temperature.memory is N/A on GDDR7 (the field is HBM-only) and no NVIDIA
-    interface exposes junction at all, so the old `max_vram >= 90` verdict
-    below could never once have fired. Junction is the vendor's stated best
-    indicator of a thermally-failing 5090, so it is worth reaching for the
-    host's exporter when one is available.
+    This exists because the NVIDIA interfaces available in-container report
+    neither value: temperature.memory is N/A (that field is HBM-only) and NVML
+    exposes no junction sensor, so the old `max_vram >= 90` verdict below could
+    never once have fired. Both ARE readable - from BAR0 MMIO - but doing that
+    here would need --privileged plus the reader binaries in the image, and
+    would be a second ungated source competing with the host's. Reusing the
+    host exporter inherits its validity gate.
     """
     global _host_warned
     if not HOST_METRICS_URL:
