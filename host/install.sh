@@ -10,6 +10,9 @@ cd "$(dirname "$0")"
 
 install -m 755 gpu-dropout-recorder.sh /usr/local/bin/gpu-dropout-recorder.sh
 install -m 755 gpu-fan-control.sh /usr/local/bin/gpu-fan-control.sh
+install -m 755 vram-metrics-merge.py /usr/local/bin/vram-metrics-merge.py
+install -m 755 vram-metrics-supervisor.sh /usr/local/bin/vram-metrics-supervisor.sh
+install -m 644 vram-metrics.service /etc/systemd/system/vram-metrics.service
 install -m 644 gpu-fan-control.service /etc/systemd/system/gpu-fan-control.service
 if [ ! -f /etc/gpu-fan-control.conf ]; then install -m 644 gpu-fan-control.conf /etc/gpu-fan-control.conf; fi
 install -m 644 gpu-dropout-recorder.service /etc/systemd/system/gpu-dropout-recorder.service
