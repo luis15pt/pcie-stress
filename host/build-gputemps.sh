@@ -71,7 +71,7 @@ install_tarball() { # $1 = tarball
 if [ "${1:-}" = "--from-tar" ]; then install_tarball "${2:?--from-tar needs a file}"; fi
 
 need_root
-command -v git >/dev/null || { echo "git required"; exit 1; }
+command -v curl >/dev/null || { echo "curl required"; exit 1; }
 
 # --- dependencies: compiler + libpci only ------------------------------------
 missing=""
@@ -86,28 +86,30 @@ if [ -n "$missing" ]; then
 fi
 
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK"
+mkdir -p "$WORK/src"
 
-# --- fetch pinned sources ----------------------------------------------------
-echo "==> fetching $GPUTEMPS_REPO @ $GPUTEMPS_COMMIT"
-git init -q "$WORK/src"
-git -C "$WORK/src" remote add origin "$GPUTEMPS_REPO"
-git -C "$WORK/src" fetch -q --depth 1 origin "$GPUTEMPS_COMMIT"
-git -C "$WORK/src" checkout -q FETCH_HEAD
-got=$(git -C "$WORK/src" rev-parse HEAD)
-[ "$got" = "$GPUTEMPS_COMMIT" ] || { echo "commit mismatch: got $got want $GPUTEMPS_COMMIT"; exit 1; }
+# --- fetch pinned sources (HTTPS + checksums, not git; see gputemps.sha) -----
+echo "==> fetching source tarball for ${GPUTEMPS_COMMIT:0:12}"
+curl -sSL --max-time 180 -o "$WORK/src.tar.gz" "$GPUTEMPS_TARBALL"
+tar xzf "$WORK/src.tar.gz" -C "$WORK/src" --strip-components=1
+
+echo "==> verifying source checksums"
+if ! (cd "$WORK/src" && printf '%s\n' "$GPUTEMPS_SUMS" | sha256sum -c --quiet -); then
+  echo "FATAL: source checksum mismatch - upstream content differs from the pin."
+  echo "  Do NOT bypass this. Re-review the source, then update GPUTEMPS_SUMS"
+  echo "  in host/gputemps.sha together with the parser it is written against."
+  exit 1
+fi
 
 # 2b85 must be in the device table or we would be reading Ada/Ampere offsets
 grep -q '0x2B85' "$WORK/src/src/sensor.c" || {
   echo "FATAL: RTX 5090 (0x2B85) not in this commit's device table"; exit 1; }
 
-echo "==> fetching nvml.h from $NVML_REPO @ $NVML_TAG"
-git init -q "$WORK/nv"
-git -C "$WORK/nv" remote add origin "$NVML_REPO"
-git -C "$WORK/nv" fetch -q --depth 1 origin "refs/tags/$NVML_TAG"
-git -C "$WORK/nv" checkout -q FETCH_HEAD
-NVML_H=$(find "$WORK/nv" -name nvml.h -print -quit)
-[ -n "$NVML_H" ] || { echo "nvml.h not found in nvidia-settings@$NVML_TAG"; exit 1; }
+echo "==> fetching nvml.h ($NVML_TAG)"
+curl -sSL --max-time 180 -o "$WORK/nvml.h" "$NVML_URL"
+echo "$NVML_SHA256  $WORK/nvml.h" | sha256sum -c --quiet - || {
+  echo "FATAL: nvml.h checksum mismatch"; exit 1; }
+NVML_H="$WORK/nvml.h"
 
 # --- private include/lib -----------------------------------------------------
 install -d -m 755 "$PREFIX/include" "$PREFIX/lib"

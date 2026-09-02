@@ -12,10 +12,29 @@
 # "index" is the true NVML index (monitor.c: gpu->index is the same value
 # passed to nvmlDeviceGetHandleByIndex), not an array position - but we still
 # run one process per BDF so a dead card breaks only its own reader.
-GPUTEMPS_REPO=https://github.com/ThomasBaruzier/gddr6-core-junction-vram-temps.git
+#
+# Fetched over plain HTTPS, NOT git: anonymous git-over-HTTPS to github.com is
+# rate-limited from these hosts' shared egress IP and fails with a misleading
+# "could not read Username" prompt even for a public repo, while codeload and
+# raw.githubusercontent return 200. Integrity therefore comes from the
+# per-file checksums below, which are content-addressed and so independent of
+# both the transport and gzip metadata churn in generated archives.
 GPUTEMPS_COMMIT=37688e080165aefdf3842889cc5535c6be7ca073
+GPUTEMPS_TARBALL=https://codeload.github.com/ThomasBaruzier/gddr6-core-junction-vram-temps/tar.gz/37688e080165aefdf3842889cc5535c6be7ca073
+
+# sha256 of each build input at that commit. The build aborts on any mismatch.
+GPUTEMPS_SUMS="\
+709b57f812587bedf99c1022baa3c5ef9cdcb23b673dfbaa9a6bef24704fd031  Makefile
+152ae0378204a301db258daa9d843903f4ee223945646efff69181ecc79f10f4  src/main.c
+ce97b284ddb5cbbb0198f469efe5133bd6079ce049b41f12f265dfcbb140c05c  src/mmio.c
+5af406fb433100371c5625ca06d036f3275bf8f07fa4b9bceaea54dd812b1dd7  src/monitor.c
+59bdfcc90534e02971f564e8dd095b84ce91ef800b848922f842057cb48326e1  src/sensor.c
+3f43070f32f64b959058dd7556d480fa990e6840c836fbfffe35fde0b7740d19  src/mmio.h
+8347fee20f0eaab2789d56a79da980de8e76ac388cc1d869ef13f4031ee0627d  src/monitor.h
+4a8d7f8f7659987e9dfc653f1fd73853e29bb6598fd0d45d302f27db89fe06ed  src/sensor.h"
 
 # nvml.h only; pinned to the tag matching the deployed driver (595.71.05).
 # We do NOT install a CUDA toolkit for one header.
-NVML_REPO=https://github.com/NVIDIA/nvidia-settings.git
 NVML_TAG=595.71.05
+NVML_URL=https://raw.githubusercontent.com/NVIDIA/nvidia-settings/595.71.05/src/nvml.h
+NVML_SHA256=c3fa30735a7148b9c1019b6b10032001a8833e18a5a891c3ff793db98255829a
