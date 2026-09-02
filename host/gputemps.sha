@@ -1,0 +1,21 @@
+# Pinned upstream sources for the junction-temperature reader.
+#
+# The tool's JSON schema has been rewritten twice upstream. The parser in
+# vram-metrics-merge.py is written against THIS commit and counts parse errors
+# rather than guessing, so bumping this pin means re-checking the parser and
+# re-running verification V3/V4/V6 (VRAM cross-agreement, per-UUID attribution
+# walk, throttle corroboration). Do not float it to HEAD.
+#
+# Schema at this commit (one JSON object per line, --json):
+#   {"timestamp":<epoch_ms>,"gpus":[{"index":N,"core":N|null,
+#    "junction":N|null,"vram":N|null}]}
+# "index" is the true NVML index (monitor.c: gpu->index is the same value
+# passed to nvmlDeviceGetHandleByIndex), not an array position - but we still
+# run one process per BDF so a dead card breaks only its own reader.
+GPUTEMPS_REPO=https://github.com/ThomasBaruzier/gddr6-core-junction-vram-temps.git
+GPUTEMPS_COMMIT=37688e080165aefdf3842889cc5535c6be7ca073
+
+# nvml.h only; pinned to the tag matching the deployed driver (595.71.05).
+# We do NOT install a CUDA toolkit for one header.
+NVML_REPO=https://github.com/NVIDIA/nvidia-settings.git
+NVML_TAG=595.71.05
