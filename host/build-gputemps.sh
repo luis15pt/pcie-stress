@@ -141,7 +141,7 @@ fi
 DRIVER=$(timeout 25 nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || echo unknown)
 cat > "$PREFIX/BUILD" << EOF
 commit:    $GPUTEMPS_COMMIT
-repo:      $GPUTEMPS_REPO
+source:    $GPUTEMPS_TARBALL
 nvml_tag:  $NVML_TAG
 built_at:  $(date -Is)
 built_on:  $(hostname)
