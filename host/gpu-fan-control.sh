@@ -27,6 +27,30 @@ STEP_DOWN=${STEP_DOWN:-3}     # max % decrease per tick (increases are instant)
 FAN1_DUTY=${FAN1_DUTY:-20}    # CPU fan (FAN1) held fixed at this duty
 FAN_SET_CMD=${FAN_SET_CMD:-}  # e.g. "ipmitool raw 0x3a 0x01 {FAN1} {DUTY} {DUTY} {DUTY} {DUTY} {DUTY} {DUTY} {DUTY}"
 
+# ---- optional junction (hotspot) curve, OFF by default --------------------
+# With JUNCTION_ENABLE=0 this file behaves exactly as it did before.
+#
+# Two independent curves; the duty is the LOUDER of the two. Core stays primary
+# because it is the only fully-trusted signal - junction comes from a
+# third-party BAR register read.
+#
+# FAILSAFE ASYMMETRY, on purpose:
+#   unreadable CORE     -> MAX_DUTY (fail cool)
+#   unreadable JUNCTION -> ignore junction entirely, do NOT failsafe
+# Otherwise any hiccup in the junction pipeline would pin every chassis fan at
+# 100% for hours. Junction may only ever RAISE duty, never lower it, and never
+# act on absent data.
+#
+# J_EMERG is 105, not 100: junction runs 10-20C above core and a legitimate
+# heat soak sits at 100-110C, so a 100C emergency would mean full fans during
+# every screening run.
+JUNCTION_ENABLE=${JUNCTION_ENABLE:-0}
+J_LOW=${J_LOW:-85}
+J_HIGH=${J_HIGH:-100}
+J_EMERG=${J_EMERG:-105}
+METRICS_FILE=${METRICS_FILE:-/metrics.txt}
+JUNCTION_MAX_AGE=${JUNCTION_MAX_AGE:-60}
+
 log() { echo "$(date -Is) $*"; }
 
 max_gpu_temp() { # hottest LIVE GPU via DCGM (hang-safe); empty on failure.
@@ -39,6 +63,32 @@ max_gpu_temp() { # hottest LIVE GPU via DCGM (hang-safe); empty on failure.
       if ($3+0 > m) m = $3+0
     }
     END { if (m) print m }'
+}
+
+max_junction_temp() { # hottest VALID junction reading, or empty
+  # Reads the exposition the vram-metrics service already produces. It never
+  # spawns gputemps: a fourth concurrent BAR reader, and a hard runtime
+  # dependency on an experimental tool inside the component that protects the
+  # hardware, is not an acceptable trade.
+  #
+  # gpu_junction_temp_celsius is only emitted for readings that passed the
+  # validity gate, so simply taking the maximum of that family excludes stale,
+  # impossible, mis-attributed and dead-GPU values with no extra logic here.
+  [ "$JUNCTION_ENABLE" = 1 ] || return 0
+  [ -f "$METRICS_FILE" ] || return 0
+  local age
+  age=$(( $(date +%s) - $(stat -c%Y "$METRICS_FILE" 2>/dev/null || echo 0) ))
+  [ "$age" -le "$JUNCTION_MAX_AGE" ] || return 0
+  awk '/^gpu_junction_temp_celsius\{/ { if ($NF+0 > m) m = $NF+0 }
+       END { if (m) print int(m) }' "$METRICS_FILE" 2>/dev/null
+}
+
+jcurve() { # jcurve <junction temp> -> duty
+  local t=$1
+  if [ "$t" -ge "$J_EMERG" ]; then echo "$EMERG_DUTY"; return; fi
+  if [ "$t" -ge "$J_HIGH" ];  then echo "$MAX_DUTY"; return; fi
+  if [ "$t" -le "$J_LOW" ];   then echo "$MIN_DUTY"; return; fi
+  echo $(( MIN_DUTY + (t - J_LOW) * (MAX_DUTY - MIN_DUTY) / (J_HIGH - J_LOW) ))
 }
 
 set_duty() { # set_duty <0-100>
@@ -98,6 +148,11 @@ trap 'log "exiting - setting fans to ${MAX_DUTY}% as failsafe"; set_duty "$MAX_D
 CUR=-1
 FAILS=0
 log "fan control: ${MIN_DUTY}%..${MAX_DUTY}% over ${T_LOW}..${T_HIGH}C, emergency ${EMERG_DUTY}% at ${T_EMERG}C, interval ${INTERVAL}s"
+if [ "$JUNCTION_ENABLE" = 1 ]; then
+  log "junction curve ENABLED: ${MIN_DUTY}%..${MAX_DUTY}% over ${J_LOW}..${J_HIGH}C, emergency ${EMERG_DUTY}% at ${J_EMERG}C (duty = louder of the two curves)"
+else
+  log "junction curve disabled (JUNCTION_ENABLE=0); core temperature only"
+fi
 while true; do
   T=$(max_gpu_temp)
   if [ -z "$T" ]; then
@@ -110,6 +165,14 @@ while true; do
   fi
   FAILS=0
   WANT=$(curve "$T")
+  DRIVER=core
+  if [ "$JUNCTION_ENABLE" = 1 ]; then
+    J=$(max_junction_temp)
+    if [ -n "$J" ]; then
+      JWANT=$(jcurve "$J")
+      if [ "$JWANT" -gt "$WANT" ]; then WANT=$JWANT; DRIVER="junction(${J}C)"; fi
+    fi
+  fi
   if [ "$WANT" -gt "$CUR" ]; then
     TARGET=$WANT                                   # increases: immediate
   elif [ "$WANT" -lt "$CUR" ]; then
@@ -120,7 +183,7 @@ while true; do
   fi
   if [ "$TARGET" != "$CUR" ]; then
     if set_duty "$TARGET"; then
-      log "hottest GPU ${T}C -> fans ${TARGET}%"
+      log "hottest GPU ${T}C -> fans ${TARGET}% (driver=$DRIVER)"
       CUR=$TARGET
     else
       log "fan set FAILED (duty ${TARGET}%)"
