@@ -1,6 +1,8 @@
 [Unit]
 Description=Real GDDR VRAM temps merged into the gddr6_temps exporter output (:9500)
 After=multi-user.target nvidia-dcgm.service
+# never run alongside the upstream service - both would write /metrics.txt
+Conflicts=gddr6-metrics-exporter.service
 # Replaces the upstream gddr6-metrics-exporter supervisor script, which pairs
 # nvml_direct_access (placeholder VRAM values on GeForce Blackwell) with
 # metrics_exporter. We keep both binaries but redirect the producer and merge
