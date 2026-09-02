@@ -109,20 +109,20 @@ def reader():
 
 
 def value_for(bus):
-    """(hotspot, valid) for a pci bus, or (None, False)."""
+    """(hotspot_max, mean, valid) for a pci bus, or (None, None, False)."""
     with live_lock:
         e = live.get(bus)
         if not e:
-            return None, False
+            return None, None, False
         mods, ts = e["modules"], e["ts"]
     if time.time() - ts > 30:            # stale
-        return None, False
+        return None, None, False
     # dead-GPU garbage: impossible module count, or every module pegged at 120
     if len(mods) > 8 or (mods and all(v == 120 for v in mods)):
-        return None, False
+        return None, None, False
     if not mods or max(mods) <= 0 or max(mods) > 115:
-        return None, False
-    return max(mods), True
+        return None, None, False
+    return max(mods), round(sum(mods) / len(mods)), True
 
 
 def merge_once(umap):
@@ -140,8 +140,13 @@ def merge_once(umap):
         if m:
             head, uuid, orig = m.group(1), m.group(2), m.group(3)
             bus = by_uuid.get(uuid)
-            hot, ok = value_for(bus) if bus else (None, False)
-            out.append("%s %s" % (head, hot if ok else orig))
+            hot, mean, ok = value_for(bus) if bus else (None, None, False)
+            if ok:
+                # HOT_SPOT = hottest module; VRAM = mean across modules
+                repl = hot if "HOT_SPOT" in head else mean
+            else:
+                repl = orig
+            out.append("%s %s" % (head, repl))
             if bus and uuid not in seen:
                 seen.add(uuid)
                 extra.append('gddr6_vram_valid{gpu_uuid="%s",pci_bus_id="%s"} %d'
