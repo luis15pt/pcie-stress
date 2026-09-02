@@ -1,0 +1,134 @@
+# Prometheus alerting rules for GPU junction (hotspot) temperature.
+#
+# Deploy on the Prometheus host (192.168.8.250) - the exporters and the
+# recorder are already live on Juno and Zhen, and the series below are ALREADY
+# being scraped by the existing "GPU Exporter - VRAM" job, so no scrape_config
+# change is needed.
+#
+# Every expression here was evaluated against the live datasource before this
+# file was written, so they are known to parse and to select the intended
+# series (9 live GPUs across the two hosts at the time of writing).
+#
+# Relationship to the recorder's own webhook: the recorder alerts independently
+# and is the belt-and-braces path, because scraping is disproportionately
+# likely to be broken exactly when a card is cooking. These rules are the
+# paging path. Expect one event to notify twice; that is deliberate.
+#
+# CALIBRATION WARNING - read before tuning:
+# Junction runs 10-20 C above core, and a 5090 under heavy load legitimately
+# sits at 100-110 C junction. "100 C" is only meaningful at a defined load and
+# inlet temperature. GpuJunctionCritical WILL fire during any deliberate
+# heat soak. Either silence it for the maintenance window or run soaks via
+# host/gpu-heat-screen.sh, which suppresses the recorder side automatically.
+groups:
+  - name: gpu-junction
+    interval: 30s
+    rules:
+
+      # Vendor guidance: sustained >=100 C junction means the card is due for
+      # service. 10m avoids paging on load ramps.
+      - alert: GpuJunctionCritical
+        expr: gpu_junction_temp_celsius >= 100
+          and on(instance, pci_bus_id) gpu_junction_temp_valid == 1
+        for: 10m
+        labels:
+          severity: critical
+          component: gpu
+        annotations:
+          summary: "GPU junction {{ $value }}C on {{ $labels.host }} {{ $labels.pci_bus_id }}"
+          description: >-
+            Junction has been at or above 100C for 10 minutes
+            (GPU {{ $labels.gpu_uuid }}). Vendor guidance is that a card
+            sustained above 100C junction is due for service. Confirm under the
+            reference load with `sudo gpu-heat-screen.sh --confirm` before
+            raising a claim, and quote the results directory - the temperature
+            only means something alongside the load it was measured under.
+
+      - alert: GpuJunctionWarning
+        expr: gpu_junction_temp_celsius >= 95
+          and on(instance, pci_bus_id) gpu_junction_temp_valid == 1
+        for: 15m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "GPU junction {{ $value }}C on {{ $labels.host }} {{ $labels.pci_bus_id }}"
+
+      # The most useful long-term signal: at constant power, a RISING
+      # junction-core delta is thermal-interface degradation (pump-out, dried
+      # paste, pad compression). Both operands are sampled at one instant by
+      # the exporter, so this is a real delta and not a race between scrapes.
+      - alert: GpuJunctionDeltaHigh
+        expr: gpu_junction_core_delta_celsius > 25
+        for: 30m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "junction-core delta {{ $value }}C on {{ $labels.host }} {{ $labels.pci_bus_id }}"
+          description: >-
+            A sustained large gap between junction and core suggests heat is
+            not leaving the die. Compare against this GPU's own history rather
+            than against its siblings - the trend matters more than the value.
+
+      # NOT optional. A silently-lost signal is the most likely long-run
+      # failure mode and means the feature has stopped protecting anything.
+      # Covers: reader process down, reading rejected by the validity gate, and
+      # samples going stale while the process still runs.
+      - alert: GpuJunctionSignalLost
+        expr: (gpu_junction_reader_up == 0)
+          or (gpu_junction_temp_valid == 0)
+          or (time() - gpu_junction_last_sample_timestamp_seconds > 120)
+        for: 15m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "junction signal lost on {{ $labels.host }} {{ $labels.pci_bus_id }}"
+          description: >-
+            Check `gpu_junction_invalid_reason` for the cause and
+            `gpu_junction_parse_errors_total` for an upstream schema change.
+            Expected and harmless for a GPU that is genuinely dead - correlate
+            with the dropout alerts before investigating.
+
+      # Whole-family absence: the exporter itself is gone. Kept separate
+      # because absent() cannot be evaluated per-series.
+      - alert: GpuJunctionExporterAbsent
+        expr: absent(gpu_junction_temp_valid)
+        for: 15m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "no junction metrics from any host"
+          description: "Check vram-metrics.service on Juno and Zhen."
+
+      # Sustained core mismatch means readings may be attributed to the wrong
+      # card, so the exporter suppresses junction for ALL GPUs. Any junction
+      # value seen while this fires must not be trusted.
+      - alert: GpuJunctionMapUntrusted
+        expr: gpu_junction_map_trusted == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: gpu
+        annotations:
+          summary: "junction mapping untrusted on {{ $labels.host }}"
+          description: >-
+            The tool's core temperature disagreed with NVML repeatedly.
+            Junction is suppressed fleet-wide on this host until it clears.
+            Re-run the attribution walk after any driver upgrade, card swap or
+            tool rebuild.
+
+      # NVIDIA's official margin. LOWER IS HOTTER - it is 90 - core, so this is
+      # a core-temperature alert wearing a different hat. It is the designated
+      # fallback if junction ever proves untrustworthy on this silicon.
+      - alert: GpuThermalMarginLow
+        expr: gpu_thermal_margin_celsius <= 5
+        for: 5m
+        labels:
+          severity: warning
+          component: gpu
+        annotations:
+          summary: "thermal margin {{ $value }}C on {{ $labels.host }} {{ $labels.pci_bus_id }}"
+          description: "Margin is 90 - core: 5C left means core is at 85C."

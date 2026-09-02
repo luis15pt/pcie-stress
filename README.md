@@ -198,6 +198,11 @@ thermal snapshot. It deliberately does **not** capture a full incident bundle
 and never disarms dropout detection — a hot card is exactly when you still
 want the dropout watchdog live.
 
+Prometheus rules are in `host/prometheus-junction-rules.yml` — deploy on the
+Prometheus host. **No `scrape_config` change is needed**: the new series are
+already collected by the existing GPU exporter job. Every expression in that
+file was evaluated against the live datasource before it was written.
+
 ### Screening for a service claim
 
 ```bash
