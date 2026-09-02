@@ -203,6 +203,28 @@ Prometheus host. **No `scrape_config` change is needed**: the new series are
 already collected by the existing GPU exporter job. Every expression in that
 file was evaluated against the live datasource before it was written.
 
+### Diagnostics dashboard
+
+`host/grafana-dashboard-gpu-dropout.json` — 38 panels covering every signal
+that could explain a dropout: power delivery (per-GPU draw, PSU output, chassis
+DCMI, 12 V and all board rails, power transients), junction/GDDR/core thermals,
+failure signals (XID, PCIe replays, throttle reasons, clocks), load context,
+chassis environment (inlet/DIMM/PSU temps, fans), host health, and the
+monitoring stack's own health. XID errors and host reboots appear as
+annotations across every panel.
+
+Import it in Grafana: **Dashboards → New → Import → Upload JSON file**. It
+targets the `576oRvhVz` Prometheus datasource; change that in the import
+dialog if yours differs. Regenerate with
+`python3 host/gen_dashboard.py > host/grafana-dashboard-gpu-dropout.json`.
+
+Every panel carries a description saying what to look for and what has already
+been ruled out, so the dashboard states its own method. Two limits are called
+out on it deliberately: **Prometheus scrapes these hosts at 60 s**, so no panel
+can show sub-minute rail behaviour — the recorder's 5 Hz ring and incident
+bundles are the only sub-second record — and a gap in the junction series means
+*rejected or stale*, never *cool*.
+
 ### Screening for a service claim
 
 ```bash

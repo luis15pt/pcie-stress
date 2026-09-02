@@ -1,0 +1,2230 @@
+{
+  "title": "GPU Dropout Diagnostics - Juno & Zhen",
+  "uid": "gpu-dropout-diag",
+  "tags": [
+    "gpu",
+    "dropout",
+    "junction",
+    "5090"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "description": "Every signal that could explain the RTX 5090 Xid-79 dropouts on Juno and Zhen. Established mechanism: deaths ride host power TRANSIENTS (400-1900W steps) - not thermals, and not PCIe signal integrity (zero AER and zero PCIe replays in 70 days). Junction temperature is the newest and least-proven signal: check the Monitoring health row before trusting it. RESOLUTION: Prometheus scrapes at 60s, so nothing here can show sub-minute behaviour; the 5Hz telemetry ring and incident bundles on each host are the only sub-second record.",
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "type": "dashboard"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "576oRvhVz"
+        },
+        "enable": true,
+        "name": "XID error",
+        "expr": "DCGM_FI_DEV_XID_ERRORS{host=~\"$host\"} > 0",
+        "iconColor": "red",
+        "titleFormat": "XID {{err_code}} on {{host}} gpu{{gpu}}",
+        "textFormat": "{{err_msg}} ({{pci_bus_id}})",
+        "tagKeys": "host,gpu"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "576oRvhVz"
+        },
+        "enable": true,
+        "name": "Host reboot",
+        "expr": "changes(node_boot_time_seconds{host=~\"$host\"}[10m]) > 0",
+        "iconColor": "orange",
+        "titleFormat": "reboot: {{host}}",
+        "tagKeys": "host"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "576oRvhVz"
+        },
+        "query": "label_values(DCGM_FI_DEV_GPU_TEMP, host)",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "sort": 1,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "gpu",
+        "label": "GPU index",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "576oRvhVz"
+        },
+        "query": "label_values(DCGM_FI_DEV_GPU_TEMP{host=~\"$host\"}, gpu)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "sort": 1,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "At a glance",
+      "collapsed": false,
+      "id": 1,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "GPUs visible",
+      "description": "DCGM keeps reporting a dead GPU, so a drop here means the driver lost it entirely. Zhen should be 5; Juno should be 5 but is currently 4 - 01:00.0 is dead pending a power cycle.",
+      "id": 2,
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count by (host) (DCGM_FI_DEV_GPU_TEMP{host=~\"$host\"})",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 4
+              },
+              {
+                "color": "green",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "XID now",
+      "description": "Non-zero = a GPU raised an Xid. 79 = 'fallen off the bus'.",
+      "id": 3,
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 3,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (host) (DCGM_FI_DEV_XID_ERRORS{host=~\"$host\"})",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Chassis power",
+      "description": "BMC DCMI whole-chassis draw. The established death mechanism is a STEP in this value, not a high level.",
+      "id": 4,
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 6,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (host) (ipmi_dcmi_power_consumption_watts{host=~\"$host\"})",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "PSU total out",
+      "description": "Sum of PSU output from the local PMBus exporter, which sees PSUs the BMC cannot.",
+      "id": 5,
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 9,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (host) (octoserver_psu_output_power_watts{host=~\"$host\",psu=\"PowerPSUTotal\"})",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "watt"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Max junction",
+      "description": "Vendor: sustained >=100C under a DEFINED load = due for service. A legitimate soak reaches 100-110C, so never read this without load context.",
+      "id": 6,
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (host) (gpu_junction_temp_celsius{host=~\"$host\"})",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 95
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "12V rail (min)",
+      "description": "Power-delivery hypothesis: a sag here coincident with a power step is the smoking gun to look for.",
+      "id": 7,
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 15,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (host) (ipmi_voltage_volts{host=~\"$host\",name=\"12V\"})",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "volt",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Uptime",
+      "description": "Short uptime after an unexplained gap means the HOST went down, not just a GPU.",
+      "id": 8,
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 18,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - node_boot_time_seconds{host=~\"$host\"}",
+          "legendFormat": "{{host}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Exporters down",
+      "description": "If non-zero, panels below may be blank for reasons unrelated to hardware.",
+      "id": 9,
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 21,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(up{host=~\"$host\"} == 0) or vector(0)",
+          "legendFormat": "down"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "text",
+      "title": "How to use this dashboard",
+      "id": 10,
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Established (do not re-litigate):** deaths ride host power **transients** (400-1900W steps); *ruled out* are PCIe signal integrity (zero AER, zero replays in 70 days), PCIe switches (none exist - direct root ports), ambient/diurnal timing, and PSU shelf state as a sole cause. Card **349f61c8** accounts for 14 of 27 deaths across two hosts and four slots - track cards by **UUID, never by slot**.\n\n**Workflow after a death:** find the red XID annotation, then read *Power transients* and *12V rail* at that timestamp, then *Active throttle reasons*. Temperature has never distinguished the bad card - survival time under load did.\n\n**Two limits to keep in mind.** (1) Scrape interval is 60s, so no panel here can show sub-minute rail behaviour - the host's 5Hz ring at `/var/log/gpu-recorder/telemetry.csv` and the incident bundles are the only sub-second record. (2) Junction temperature comes from a third-party BAR0 register offset whose 5090 profile is upstream-**experimental**; a gap in the junction series means *rejected or stale*, not cool. Check the **Monitoring health** row before drawing a conclusion from it."
+      }
+    },
+    {
+      "type": "row",
+      "title": "Power delivery - the established death mechanism",
+      "collapsed": false,
+      "id": 11,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Per-GPU power draw",
+      "description": "10 of 11 resolvable deaths sat on a 400-1900W host power step. Look for one card's draw stepping hard, or all cards ramping together.",
+      "id": 12,
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 11
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_POWER_USAGE{host=~\"$host\",gpu=~\"$gpu\"}",
+          "legendFormat": "{{host}} gpu{{gpu}} {{pci_bus_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "watt"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Power budget: GPUs vs PSU output vs chassis",
+      "description": "Three independent measurements of the same power. Divergence between them is itself a finding - e.g. PSU output far exceeding GPU draw means something else is loading the rails.",
+      "id": 13,
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 11
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (host) (DCGM_FI_DEV_POWER_USAGE{host=~\"$host\"})",
+          "legendFormat": "{{host}} GPUs sum"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (host) (octoserver_psu_output_power_watts{host=~\"$host\",psu=\"PowerPSUTotal\"})",
+          "legendFormat": "{{host}} PSU out"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (host) (ipmi_dcmi_power_consumption_watts{host=~\"$host\"})",
+          "legendFormat": "{{host}} chassis DCMI"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "watt"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Power TRANSIENTS (5m change in total GPU draw)",
+      "description": "THE key panel: deaths correlate with steps of 400-1900W. Spikes here - in either direction - are the events to line up against the red XID annotations. RESOLUTION CAVEAT: Prometheus scrapes these hosts every 60s, so a 1m window contains a single sample and this panel can only show minute-scale steps. Genuine sub-second rail transients are invisible here and exist ONLY in the recorder's 5Hz ring on the host (/var/log/gpu-recorder/telemetry.csv) - do not conclude 'no transient' from this panel alone.",
+      "id": 14,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (host) (delta(DCGM_FI_DEV_POWER_USAGE{host=~\"$host\"}[5m]))",
+          "legendFormat": "{{host}} dW/5m"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 20,
+            "showPoints": "never"
+          },
+          "unit": "watt",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 400
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": [],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "12V rail voltage",
+      "description": "Zoom in hard. A dip at the instant of a power step supports the power-delivery hypothesis; a flat rail through a step weakens it.",
+      "id": 15,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 20
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ipmi_voltage_volts{host=~\"$host\",name=\"12V\"}",
+          "legendFormat": "{{host}} 12V"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "volt"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Per-PSU output power",
+      "description": "Uneven sharing, or one PSU dropping its share, points at a specific unit. PSU faults here followed the HARDWARE across slots, not the slot.",
+      "id": 16,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 20
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "octoserver_psu_output_power_watts{host=~\"$host\",psu!=\"PowerPSUTotal\"}",
+          "legendFormat": "{{host}} {{psu}} slot{{slot}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "watt"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "PSU status OK (0 = fault)",
+      "description": "Necessary but not sufficient: a host ran 10,849 minutes on a degraded shelf with ZERO deaths, so a fault here does not by itself explain a dropout.",
+      "id": 17,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 28
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "octoserver_psu_status_ok{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{psu}} slot{{slot}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "lineInterpolation": "stepAfter"
+          },
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "All board rails",
+      "description": "VCPU/VSOC/VCCM are the CPU and DRAM rails. A correlated wobble across several rails suggests an upstream (PSU/input) cause rather than one failing regulator.",
+      "id": 18,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 28
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ipmi_voltage_volts{host=~\"$host\",name=~\"12V|5V|3V|1.8V|VCPU|VSOC|VCCM.*|VPPM.*\"}",
+          "legendFormat": "{{host}} {{name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "volt"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "PSU input voltage & current",
+      "description": "Mains-side view. A sag in INPUT voltage during a load step means the problem is upstream of the PSUs entirely.",
+      "id": 19,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 28
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "octoserver_psu_input_voltage_volts{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{psu}} Vin"
+        },
+        {
+          "refId": "B",
+          "expr": "ipmi_current_amperes{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{name}} A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* A$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "amp"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*Vin$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "volt"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Junction & thermals - newest signal, verify before trusting",
+      "collapsed": false,
+      "id": 20,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Junction (hotspot) temperature",
+      "description": "From BAR0 MMIO - no NVIDIA interface reports this. Only emitted when the reading passes the validity gate, so a GAP means rejected or stale, NOT cool. 95C warn, 100C service.",
+      "id": 21,
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 37
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "gpu_junction_temp_celsius{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{pci_bus_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "unit": "celsius",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 95
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Junction - core delta",
+      "description": "Best long-term 'is this card degrading' metric. Both operands share one instant. At CONSTANT power a rising trend means thermal-interface degradation (pump-out, dried paste). Compare a card against its own history, not against its siblings.",
+      "id": 22,
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 37
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "gpu_junction_core_delta_celsius{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{pci_bus_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "unit": "celsius",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 25
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "mean",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Core temperature (two independent sources)",
+      "description": "gputemps vs NVML. These must agree within ~3C - that agreement is what proves junction readings are attributed to the right card. Divergence invalidates the junction panels above.",
+      "id": 23,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 46
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "gpu_core_temp_celsius{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{pci_bus_id}} {{source}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "celsius"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "GDDR max (two independent BAR readers)",
+      "description": "gddr6_* and gpu_vram_* are separate implementations reading the same sensors. They agree within 0-2C, which is the strongest evidence that the BAR mapping and 5090 profile are correct.",
+      "id": 24,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 46
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "gddr6_vram_temp_max_celsius{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{pci_bus_id}} reader1"
+        },
+        {
+          "refId": "B",
+          "expr": "gpu_vram_temp_max_celsius{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{pci_bus_id}} reader2"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "celsius"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Thermal margin (T.Limit) - LOWER IS HOTTER",
+      "description": "NVIDIA's official margin. Measured to be exactly 90 - core on these cards, so it adds nothing over core temperature - but it is the designated fallback if junction ever proves untrustworthy. Alert on LOW values.",
+      "id": 25,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 46
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "gpu_thermal_margin_celsius{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{pci_bus_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "celsius"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Per-module GDDR temperature (all modules)",
+      "description": "8 modules per card. One module consistently hotter than its siblings is a localised cooling problem (pad contact) rather than a whole-card issue.",
+      "id": 26,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 54
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "gddr6_vram_module_temp_celsius{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{pci_bus_id}} m{{module}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "celsius"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [],
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Failure signals",
+      "collapsed": false,
+      "id": 27,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 62
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "XID errors",
+      "description": "79 = 'GPU has fallen off the bus'. 31 = memory/illegal address. 154 = recovery action. Each occurrence is also annotated across every panel on this dashboard.",
+      "id": 28,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 63
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_XID_ERRORS{host=~\"$host\",gpu=~\"$gpu\"}",
+          "legendFormat": "{{host}} gpu{{gpu}} {{err_msg}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "lineInterpolation": "stepAfter"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "PCIe replay counter (5m increase)",
+      "description": "RULED OUT as a cause: zero replays on every GPU for 70 days, and zero AER through 40+ minutes of maximum DMA. Kept because any non-zero value here would overturn that conclusion.",
+      "id": 29,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 63
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(DCGM_FI_DEV_PCIE_REPLAY_COUNTER{host=~\"$host\",gpu=~\"$gpu\"}[5m])",
+          "legendFormat": "{{host}} gpu{{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 15,
+            "showPoints": "never"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Active throttle reasons",
+      "description": "HW-THERMAL / HW-SLOWDOWN firing at only 77-82C core is the anomaly that motivated the junction work. KEY CHECK: if HW-THERMAL asserts while junction reads ~80C, the junction offsets are WRONG.",
+      "id": 30,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 71
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_CLOCKS_THROTTLE_REASON{host=~\"$host\",gpu=~\"$gpu\",reason!~\"GpuIdle|ApplicationsClocksSetting\"} > 0",
+          "legendFormat": "{{host}} gpu{{gpu}} {{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "lineInterpolation": "stepAfter"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "SM & memory clocks",
+      "description": "A clock collapse without a throttle reason, or clocks pinned low after an event, indicates the card never recovered.",
+      "id": 31,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 71
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_SM_CLOCK{host=~\"$host\",gpu=~\"$gpu\"}",
+          "legendFormat": "{{host}} gpu{{gpu}} SM"
+        },
+        {
+          "refId": "B",
+          "expr": "DCGM_FI_DEV_MEM_CLOCK{host=~\"$host\",gpu=~\"$gpu\"}",
+          "legendFormat": "{{host}} gpu{{gpu}} MEM"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "rothz"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Load context - what the cards were actually doing",
+      "collapsed": false,
+      "id": 32,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 79
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Utilisation & engine activity",
+      "description": "There were NO idle deaths. Establishing what the card was doing at the moment of death is essential context for any thermal or power claim.",
+      "id": 33,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 80
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_GPU_UTIL{host=~\"$host\",gpu=~\"$gpu\"}",
+          "legendFormat": "{{host}} gpu{{gpu}} util"
+        },
+        {
+          "refId": "B",
+          "expr": "DCGM_FI_PROF_PIPE_TENSOR_ACTIVE{host=~\"$host\",gpu=~\"$gpu\"} * 100",
+          "legendFormat": "{{host}} gpu{{gpu}} tensor"
+        },
+        {
+          "refId": "C",
+          "expr": "DCGM_FI_PROF_DRAM_ACTIVE{host=~\"$host\",gpu=~\"$gpu\"} * 100",
+          "legendFormat": "{{host}} gpu{{gpu}} dram"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "percent",
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "PCIe throughput",
+      "description": "Heavy sustained DMA is the condition the C-Payne stress tool reproduces. Useful for correlating a death with bus activity.",
+      "id": 34,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 80
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_PROF_PCIE_TX_BYTES{host=~\"$host\",gpu=~\"$gpu\"}",
+          "legendFormat": "{{host}} gpu{{gpu}} TX"
+        },
+        {
+          "refId": "B",
+          "expr": "DCGM_FI_PROF_PCIE_RX_BYTES{host=~\"$host\",gpu=~\"$gpu\"}",
+          "legendFormat": "{{host}} gpu{{gpu}} RX"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Framebuffer used",
+      "description": "A large resident footprint means the GDDR modules are genuinely being exercised, which matters when reading the VRAM temperatures above.",
+      "id": 35,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 80
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_FB_USED{host=~\"$host\",gpu=~\"$gpu\"} * 1024 * 1024",
+          "legendFormat": "{{host}} gpu{{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Chassis environment",
+      "collapsed": false,
+      "id": 36,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 88
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Chassis & board temperatures",
+      "description": "'Card Side Temp' is the closest thing to a GPU inlet reading. Ambient was RULED OUT as a driver of death timing, but inlet temperature is still required context for any junction service claim.",
+      "id": 37,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 89
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ipmi_temperature_celsius{host=~\"$host\",name=~\"CPU Temp|MB Temp|Card Side Temp|Onboard LAN Temp|TEMP_TR1\"}",
+          "legendFormat": "{{host}} {{name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "celsius"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Chassis fan speeds",
+      "description": "Driven by gpu-fan-control (20% floor, 50% ceiling over 70-85C core). A fan stuck high often means it is tracking a DEAD GPU's frozen temperature - that exact bug has happened here.",
+      "id": 38,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 89
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ipmi_fan_speed_rpm{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "rotrpm"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DIMM temperatures",
+      "description": "Zhen has an outstanding 8th-DIMM issue. A MISSING sensor here is as informative as a hot one.",
+      "id": 39,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 97
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ipmi_temperature_celsius{host=~\"$host\",name=~\"TEMP_CPU1_DDR4.*\"}",
+          "legendFormat": "{{host}} {{name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
+          "unit": "celsius"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "PSU temperature & fans",
+      "description": "A PSU running hot, or with a stalled fan, can trip protection under a load step without ever reporting a hard fault.",
+      "id": 40,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 97
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "octoserver_psu_temperature_celsius{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{psu}} temp"
+        },
+        {
+          "refId": "B",
+          "expr": "ipmi_temperature_celsius{host=~\"$host\",name=~\"PSU. TEMP\"}",
+          "legendFormat": "{{host}} {{name}}"
+        },
+        {
+          "refId": "C",
+          "expr": "octoserver_psu_fan_speed_rpm{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{psu}} fan"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* fan$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "rotrpm"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*(temp|TEMP)$"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Host & monitoring health",
+      "collapsed": false,
+      "id": 41,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 105
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Host load & memory",
+      "description": "Rules out the host itself stalling as the cause of an apparent GPU disappearance.",
+      "id": 42,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 106
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_load1{host=~\"$host\"}",
+          "legendFormat": "{{host}} load1"
+        },
+        {
+          "refId": "B",
+          "expr": "node_memory_MemAvailable_bytes{host=~\"$host\"} / 1024 / 1024 / 1024",
+          "legendFormat": "{{host}} mem avail GiB"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*GiB$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "BMC SEL log count",
+      "description": "The BMC event log records hardware faults the OS never sees. A step here at the time of a death is a strong lead - Juno's full SEL is an outstanding action, and a full log stops recording new events.",
+      "id": 43,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 106
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ipmi_sel_logs_count{host=~\"$host\"}",
+          "legendFormat": "{{host}} SEL entries"
+        },
+        {
+          "refId": "B",
+          "expr": "ipmi_sel_free_space_bytes{host=~\"$host\"}",
+          "legendFormat": "{{host}} SEL free bytes"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*free bytes$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "bytes"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Monitoring health - READ THIS BEFORE TRUSTING JUNCTION",
+      "description": "junction_temp_valid 0, map_trusted 0, reader_up 0, or a rising parse_errors all mean the junction panels above are not reporting reality. The 5090 profile in the upstream tool is EXPERIMENTAL and was never maintainer-tested on a 5090.",
+      "id": 44,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 106
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "gpu_junction_temp_valid{host=~\"$host\"}",
+          "legendFormat": "{{host}} {{pci_bus_id}} valid"
+        },
+        {
+          "refId": "B",
+          "expr": "min by (host) (gpu_junction_map_trusted{host=~\"$host\"})",
+          "legendFormat": "{{host}} map trusted"
+        },
+        {
+          "refId": "C",
+          "expr": "min by (host) (gpu_junction_reader_up{host=~\"$host\"})",
+          "legendFormat": "{{host}} readers up"
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (host) (gpu_junction_parse_errors_total{host=~\"$host\"})",
+          "legendFormat": "{{host}} parse errors"
+        },
+        {
+          "refId": "E",
+          "expr": "time() - max by (host) (gddr6_vram_merge_timestamp_seconds{host=~\"$host\"})",
+          "legendFormat": "{{host}} exporter age s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*age s$"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "min"
+          ],
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "GPU inventory - identify a card across hosts and slots",
+      "description": "Card 349f61c8 accounts for 14 of 27 deaths across two hosts and four slots, so always track a card by UUID, never by slot.",
+      "id": 45,
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 114
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "576oRvhVz"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "DCGM_FI_DEV_POWER_USAGE{host=~\"$host\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": ""
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "job": true,
+              "service": true,
+              "__name__": true,
+              "instance": true,
+              "Hostname": true,
+              "device": true
+            },
+            "renameByName": {
+              "host": "Host",
+              "gpu": "Idx",
+              "pci_bus_id": "PCI slot",
+              "UUID": "GPU UUID",
+              "modelName": "Model",
+              "DCGM_FI_DRIVER_VERSION": "Driver"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true
+      }
+    }
+  ]
+}
