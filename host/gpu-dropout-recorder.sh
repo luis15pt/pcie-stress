@@ -262,6 +262,35 @@ dead_gpus_from_ring() { # GPU ids whose latest XID field ($NF) is numeric >0
     END { for (g in bad) print g":"bad[g] }'
 }
 
+KNOWN_DEAD=""
+NEW_DEAD=""
+detect_new_dead() { # sets NEW_DEAD to GPU ids that became dead since last call
+  # Sets globals rather than printing: $(...) runs in a SUBSHELL, so a printing
+  # version could never persist its KNOWN_DEAD update back to the caller and
+  # would re-report the same dead GPU on every single tick. Caught by
+  # test_dropout_arming.sh - the same trap that put a log line inside a webhook
+  # payload in capture_thermal_snapshot.
+  # Replaces a global ARMED latch that was disarmed by the FIRST dead GPU and
+  # could only re-arm when the dead list became completely EMPTY. On a host
+  # with one permanently dead card that never happens, so the recorder went
+  # silently deaf to every subsequent dropout - on exactly the hosts that
+  # needed it most. Tracking the dead SET makes each GPU edge-triggered: a
+  # card that dies fires once, and a card that recovers and dies again fires
+  # again.
+  local cur ids new id
+  cur=$(dead_gpus_from_ring)
+  ids=$(printf "%s\n" $cur | cut -d: -f1 | sort -un | paste -sd" " -)
+  new=""
+  for id in $ids; do
+    case " $KNOWN_DEAD " in
+      *" $id "*) ;;
+      *) new="$new $id" ;;
+    esac
+  done
+  KNOWN_DEAD="$ids"
+  NEW_DEAD="${new# }"
+}
+
 kernel_dropout_count() { dmesg 2>/dev/null | grep -c 'fallen off the bus'; }
 kernel_xid_count()     { dmesg 2>/dev/null | grep -c 'NVRM: Xid'; }
 
@@ -527,20 +556,25 @@ BASE_XIDS=$(kernel_xid_count)
 if [ -n "$EXPECTED_GPUS" ]; then BASE_COUNT=$EXPECTED_GPUS; else BASE_COUNT=$(gpu_count); fi
 log "baseline: gpus=$BASE_COUNT kernel_dropouts=$BASE_DROPS kernel_xids=$BASE_XIDS"
 
-ARMED=1
 sleep 5
-# already-dead check at startup: alert once, stay disarmed until it clears
+# Already-dead at startup: record the set and alert once. Deliberately does NOT
+# disarm anything - the other GPUs on this host must stay monitored.
 startup_dead=$(dead_gpus_from_ring)
 if [ -n "$startup_dead" ]; then
+  KNOWN_DEAD=$(printf "%s\n" $startup_dead | cut -d: -f1 | sort -un | paste -sd" " -)
   capture_incident "already-dead-at-start" "$startup_dead"
-  ARMED=0
+  LAST_INCIDENT=$(date +%s)
 fi
 
 TICK=0
 LAST_SIZE=0
 STALL=0
 STALL_FIRED=0
-CLEAR=0
+LAST_INCIDENT=${LAST_INCIDENT:-0}
+# Storm guard only. Every detector below is edge-triggered on its own, so this
+# should never actually suppress anything; it exists so a detector bug cannot
+# fill the disk with bundles. manual-test is exempt.
+INCIDENT_COOLDOWN=${INCIDENT_COOLDOWN:-60}
 while true; do
   sleep "$INTERVAL"
   TICK=$((TICK + 1))
@@ -552,14 +586,20 @@ while true; do
     reason="manual-test"; dead="none"; FORCE_CAPTURE=0
   fi
 
-  # 1. XID in the telemetry stream (primary, sub-second detection source)
+  # 1. XID in the telemetry stream (primary, sub-second detection source).
+  # Fires only for GPUs that are NEWLY dead, so a host carrying a known-dead
+  # card still detects the next one.
   if [ -z "$reason" ]; then
-    dead=$(dead_gpus_from_ring)
-    if [ -n "$dead" ] && [ "$ARMED" = 1 ]; then reason="dcgm-xid"; fi
+    detect_new_dead
+    if [ -n "$NEW_DEAD" ]; then
+      dead=$(dead_gpus_from_ring)
+      reason="dcgm-xid(new:$(printf '%s' "$NEW_DEAD" | tr ' ' ','))"
+    fi
   fi
 
-  # 2. kernel log counters (immune to journal rotation)
-  if [ -z "$reason" ] && [ "$ARMED" = 1 ]; then
+  # 2. kernel log counters (immune to journal rotation). Edge-triggered by its
+  # own baselines, which it advances when it fires.
+  if [ -z "$reason" ]; then
     d=$(kernel_dropout_count); x=$(kernel_xid_count)
     if [ "$d" -gt "$BASE_DROPS" ] || [ "$x" -gt "$BASE_XIDS" ]; then
       reason="kernel-log"; BASE_DROPS=$d; BASE_XIDS=$x
@@ -569,13 +609,17 @@ while true; do
   # 3. GPU count via nvidia-smi (every Nth tick; dead GPUs vanish from -L).
   # Baseline auto-raises: if the service started while a GPU was dead and the
   # card later recovers (reset/reboot), the higher count becomes the new floor.
-  if [ -z "$reason" ] && [ "$ARMED" = 1 ] && [ $((TICK % COUNT_CHECK_EVERY)) = 0 ] && [ "$MODE" != none ]; then
+  if [ -z "$reason" ] && [ $((TICK % COUNT_CHECK_EVERY)) = 0 ] && [ "$MODE" != none ]; then
     c=$(gpu_count)
     if [ "$c" -gt "$BASE_COUNT" ]; then
       BASE_COUNT=$c
       log "GPU-count baseline raised to $c"
     elif [ "$c" -lt "$BASE_COUNT" ] && [ "$c" -ge 0 ]; then
       reason="gpu-count($c<$BASE_COUNT)"
+      # LOWER the baseline too: without this the check re-fired every cycle
+      # once a card was gone. It used to be the global ARMED latch that
+      # stopped the repeat; now each detector must be edge-triggered itself.
+      BASE_COUNT=$c
     fi
   fi
 
@@ -587,7 +631,7 @@ while true; do
     if [ "$sz" = "$LAST_SIZE" ]; then
       STALL=$((STALL + 1))
       if ! kill -0 "${SAMPLER_PID:-0}" 2>/dev/null; then stop_sampler; start_sampler; fi
-      if [ "$STALL" -ge 3 ] && [ "$ARMED" = 1 ] && [ -z "$reason" ] \
+      if [ "$STALL" -ge 3 ] && [ -z "$reason" ] \
          && [ "$STALL_FIRED" = 0 ] && [ "$BASE_COUNT" -gt 0 ]; then
         reason="sampler-stalled"; STALL_FIRED=1; stop_sampler; start_sampler
       fi
@@ -598,14 +642,21 @@ while true; do
   fi
 
   if [ -n "$reason" ]; then
-    capture_incident "$reason" "${dead:-unknown}"
-    [ "$reason" = "manual-test" ] || ARMED=0
+    now_s=$(date +%s)
+    if [ "$reason" = "manual-test" ] \
+       || [ $((now_s - LAST_INCIDENT)) -ge "$INCIDENT_COOLDOWN" ]; then
+      capture_incident "$reason" "${dead:-unknown}"
+      LAST_INCIDENT=$now_s
+    else
+      log "suppressed duplicate incident ($reason) inside ${INCIDENT_COOLDOWN}s cooldown"
+    fi
   fi
 
   # Junction thermal watch - deliberately LAST and skipped on any tick where a
   # dropout fired, so one physical event cannot page twice. It never calls
-  # capture_incident() and never touches ARMED: dropout detection must stay
-  # live while a card is hot, which is exactly when it matters most.
+  # capture_incident() and never touches the dropout detectors: dropout
+  # detection must stay live while a card is hot, which is exactly when it
+  # matters most.
   if [ -z "$reason" ] && [ "$JUNCTION_CRIT" -gt 0 ]; then
     if junction_suppressed; then
       # still sampled into junction.csv by metrics_loop; only alerting pauses
@@ -615,20 +666,6 @@ while true; do
     fi
   fi
 
-  # re-arm once the dead signature clears (post power-cycle recovery).
-  # Require CLEAR_NEEDED consecutive clean ticks: a single clean read can be a
-  # race with ring rotation (fresh file briefly missing dead-GPU rows), which
-  # caused re-arm/re-fire flapping every rotation period.
-  if [ "$ARMED" = 0 ]; then
-    if [ -z "$(dead_gpus_from_ring)" ] && { [ "$MODE" = none ] || [ "$(gpu_count)" -ge "$BASE_COUNT" ]; }; then
-      CLEAR=$((CLEAR + 1))
-      if [ "$CLEAR" -ge "${CLEAR_NEEDED:-6}" ]; then
-        ARMED=1; CLEAR=0
-        BASE_DROPS=$(kernel_dropout_count); BASE_XIDS=$(kernel_xid_count)
-        log "re-armed: GPUs recovered"
-      fi
-    else
-      CLEAR=0
-    fi
-  fi
+  # No re-arm block: arming is now per GPU (see new_dead_gpus). A card that
+  # recovers leaves the dead set, so if it dies again it is detected again.
 done
