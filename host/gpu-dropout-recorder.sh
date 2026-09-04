@@ -57,9 +57,18 @@ MAX_THERMAL_SNAPS=${MAX_THERMAL_SNAPS:-20}
 JUNCTION_SUPPRESS_FILE=${JUNCTION_SUPPRESS_FILE:-/run/gpu-junction-suppress}
 JUNCTION_SUPPRESS_MAX=${JUNCTION_SUPPRESS_MAX:-43200}   # 12h hard ceiling
 
-# dcgm fields: sm_clk mem_clk throttle mem_temp gpu_temp power pstate gpu_util
-# mem_util pcie_replay xid  (xid LAST -> $NF in detection)
-DCGM_FIELDS="100,101,112,140,150,155,190,203,204,202,230"
+# dcgm fields: sm_clk mem_clk throttle mem_temp gpu_temp power pstate FAN
+# gpu_util mem_util pcie_replay xid
+#
+# 230 (xid) MUST REMAIN LAST: detection reads it as $NF. Insert new fields
+# before it, never after.
+#
+# 191 (fan speed %) was added 2026-09-05 after a dropout we could not fully
+# explain: the card died at 108C junction while drawing LESS power than a
+# sibling that stayed 15C cooler, and a failed GPU fan explains that far more
+# simply than degraded paste - but nothing recorded fan speed, so the two could
+# not be told apart. They have completely different remedies.
+DCGM_FIELDS="100,101,112,140,150,155,190,191,203,204,202,230"
 
 TEL="$DATA_DIR/telemetry.csv"
 BMC="$DATA_DIR/bmc.csv"
@@ -330,6 +339,8 @@ capture_incident() { # capture_incident <reason> <dead-ids>
   # driver view + physical card map (for the swap experiment)
   timeout 20 nvidia-smi > "$dir/nvidia-smi.txt" 2>&1
   timeout 20 nvidia-smi --query-gpu=index,pci.bus_id,serial,uuid --format=csv > "$dir/gpu-map.csv" 2>&1
+  timeout 20 nvidia-smi --query-gpu=pci.bus_id,fan.speed,temperature.gpu,power.draw,clocks.sm,utilization.gpu \
+    --format=csv > "$dir/nvidia-smi-fan.csv" 2>&1
   refresh_gpu_map; cp "$DATA_DIR/gpu-map.txt" "$dir/dcgm-gpu-map.txt" 2>/dev/null
 
   # NVIDIA case file (safe-mode: plain mode can hang against a dead GPU)
@@ -391,6 +402,11 @@ capture_thermal_snapshot() { # <level> <bdf> <junction>; result in $THERMAL_SNAP
   cat "$TEL.1" "$TEL" 2>/dev/null | tail -n 20000 > "$dir/telemetry-tail.csv"
   timeout 25 dcgmi dmon -e "$DCGM_FIELDS" -c 1 > "$dir/dcgm-now.txt" 2>&1
   timeout 25 nvidia-smi -q -d TEMPERATURE,POWER,PERFORMANCE > "$dir/nvidia-smi-temps.txt" 2>&1
+  # `nvidia-smi -q -d` has no FAN section, so fan speed needs its own query.
+  # Its absence here is why a thermal snapshot taken 3 minutes before a death
+  # still could not say whether the card's own fan was turning.
+  timeout 25 nvidia-smi --query-gpu=pci.bus_id,fan.speed,temperature.gpu,power.draw,clocks.sm,utilization.gpu \
+    --format=csv > "$dir/nvidia-smi-fan.csv" 2>&1
   cp "$METRICS_FILE" "$dir/metrics.txt" 2>/dev/null
   cp "$DATA_DIR/gpu-map.txt" "$dir/dcgm-gpu-map.txt" 2>/dev/null
   printf '{"host":"%s","time":"%s","kind":"thermal","level":"%s","pci_bus_id":"%s","junction_c":"%s"}\n' \
