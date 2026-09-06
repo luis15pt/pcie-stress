@@ -1,0 +1,37 @@
+[Unit]
+Description=PSU Power Prometheus Exporter
+Documentation=https://github.com/luis15pt/psu-monitor/tree/main
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /opt/psu-monitor/psu_exporter.py --port 9101 --host 0.0.0.0
+Restart=always
+RestartSec=10
+
+Environment="PYTHONUNBUFFERED=1"
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+# CPUQuota was 10% (100ms of CPU per second). The exporter spawns ~60
+# short-lived ipmitool processes per scrape, so it is fork/exec-heavy and
+# CPU-bound. At 10% on a BUSY host a scrape took ~30s - past Prometheus'
+# scrape timeout - and the PSU series silently vanished from Grafana, which is
+# exactly the data needed to diagnose the 2026-09-06 PSU shutdowns. The same
+# quota looked harmless on an idle host (~4s), so this only bites under load.
+# 50% still bounds the service with ample headroom.
+CPUQuota=50%
+# MemoryLimit= is the deprecated cgroup-v1 name and was silently not applied
+# (MemoryMax read as infinity). Actual RSS is ~25M.
+MemoryMax=256M
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=psu-monitor
+
+[Install]
+WantedBy=multi-user.target

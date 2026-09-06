@@ -13,14 +13,20 @@ control. This is the unified version, deployed to both.
     scp host/psu-monitor/psu_exporter.py <host>:/tmp/
     ssh <host> 'sudo cp /tmp/psu_exporter.py /opt/psu-monitor/ && sudo systemctl restart <unit>'
 
-**The unit name differs per host** — `psu-monitor.service` on Juno,
-`psu-exporter.service` on Zhen. Restarting the wrong name silently leaves the
-old code running in memory.
+The unit is **`psu-monitor.service` on both hosts** (standardised 2026-09-06).
+It was previously `psu-exporter.service` on Zhen, and restarting the wrong name
+silently left old code running in memory — which happened during a real
+deployment. `psu-monitor` was chosen to match `/opt/psu-monitor/` and the
+upstream repo name.
 
 ## Fixes applied 2026-09-06
 
 1. **CPUQuota** (the big one, config not code): 10% -> 50%. Scrape 30s -> ~4s.
    At 30s it exceeded Prometheus' scrape timeout and the series vanished.
+   Both hosts had the identical 10% quota; it only bit on the host that was
+   BUSY (Juno was running a GPU workload, Zhen was idle at ~4s). A quota that
+   looks harmless on an idle box can starve the exporter exactly when the
+   machine is under the load you most need to observe.
 2. **Identity caching**: model/serial/firmware/mfr-id/date were re-read on every
    scrape — 6 i2c round-trips per PSU, one of which read 0x9A twice for two
    fields holding the same value. Now read once per address and cached, but only
